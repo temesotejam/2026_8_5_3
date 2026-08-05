@@ -20,6 +20,20 @@
 
 ## ビルド
 
+### Webからコンパイル済みファームウェアを書き込む
+
+GitHub Actionsが通信側と制御側を自動コンパイルし、次のWeb Installerへ公開します。
+
+**[水上翼船 Firmware Installer](https://temesotejam.github.io/2026_8_5_3/)**
+
+- 制御側XIAO ESP32S3と通信側CoreS3は別ボタンです。
+- PC版ChromeまたはEdgeのWeb Serialを使用します。
+- 通常はXIAOがCOM4、CoreS3がCOM6です。COM3は使用しません。
+- 書き込み前にモータ用バッテリーとサーボ外部電源を切ってください。
+- 各ビルドの結合済みBIN、SHA-256、manifestはGitHub Actionsのartifactからも取得できます。
+
+### PlatformIOを使う
+
 ```bash
 pio run -d control
 pio run -d communication
