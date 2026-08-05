@@ -1,0 +1,86 @@
+# 本番実装仕様
+
+## 構成
+
+通信側CoreS3はGNSSを受信し、100 ms周期で制御側へ送ります。制御側XIAOはBNO08X、ToF、INA226、AS5600、VESCを読み、本番制御器を50 Hzで実行します。全テレメトリは921600 bps、8N1、COBS＋CRC32でCoreS3へ戻り、SDとWeb画面へ同時に反映されます。
+
+独自MahonyおよびESKFは実装・実行経路から削除しました。姿勢の唯一の正規入力はBNO08Xの`Rotation Vector`クォータニオンです。
+
+## 制御側ピン
+
+| XIAO端子 | GPIO | 用途 |
+|---|---:|---|
+| D0 | 1 | 周辺I2C SCL |
+| D1 | 2 | 周辺I2C SDA |
+| D2 | 3 | BNO08X RST |
+| D3 | 4 | BNO08X INT |
+| D4 | 5 | BNO08X SDA |
+| D5 | 6 | BNO08X SCL |
+| D6 | 43 | CoreS3 UART RX |
+| D7 | 44 | CoreS3 UART TX |
+| D8 | 7 | VESC UART RX |
+| D9 | 8 | VESC UART TX |
+| D10 | 9 | PCA9685 OE予約 |
+
+周辺I2CにはToF `0x29`、PCA9685 `0x40`、INA226 `0x44`、AS5600 `0x36`を接続します。BNO08Xは専用I2C `0x4A`（代替`0x4B`）です。
+
+## 制御則
+
+```text
+前翼共通 = pitch PD + ToF height P
+左前翼   = 前翼共通 + roll PD
+右前翼   = 前翼共通 - roll PD
+後部ヨー = yaw PD
+```
+
+Auto Waypointでは現在位置から目標点への単純方位ではなく、前区間からのLOS（look-ahead 4 m）方位を使います。目標半径は既定1.5 mで、最終点到達時は推進を停止してDISARMEDへ遷移します。速度上昇時はヨーゲインと最大ヨー指令を下げます。pitchが危険域へ近づくと高さ・roll・推進を抑え、pitch回復を優先します。
+
+制御値と安全閾値は`control/include/app_config.h`に集約しています。現行の主要値は次のとおりです。
+
+| 項目 | 値 |
+|---|---:|
+| 目標高さ | 0.45 m |
+| 自動推進指令 | 55% |
+| VESC Duty上限 | 60% |
+| サーボ範囲 | 1200–1800 µs |
+| サーボ更新 | 50 Hz |
+| サーボ変化速度 | 300 µs/s |
+| 低電圧制限／停止 | 9.5 V／8.5 V |
+| 過電流制限／停止 | 22 A／28 A |
+| 拘束判定 | 指令25%以上、8 A以上、100 rpm未満が1秒 |
+
+## 安全状態
+
+起動状態はDISARMEDです。ARM時にPCA9685、BNO08X、ToF、INA226、AS5600、VESC、CoreS3 heartbeat、および選択モードに必要な入力を確認します。Manual、Attitude Assist、Heading Holdでは500 ms以内の手動指令、Auto Waypointでは有効GNSSと1点以上の経路が必要です。
+
+START後に次のどれかを検出すると、推進Dutyを即時0、PCA9685を全チャンネルFull OFFにします。
+
+- CoreS3 heartbeat途絶
+- BNO08X姿勢または角速度の無効・期限切れ
+- GNSS期限切れ（Auto Waypoint）
+- 電源監視または回転数監視の無効・期限切れ
+- VESCテレメトリ期限切れまたはfault
+- 臨界低電圧、臨界過電流、モータ拘束
+- 非有限値、危険姿勢、E-STOP
+
+ToFだけが一時的に無効になった場合は、高さ項を0にして姿勢制御を継続し、テレメトリへdegraded flagを残します。
+
+## Web操作
+
+CoreS3のAP `BOAT-CONTROL`へ接続し、画面に表示されるIPアドレスを開きます。
+
+1. DISARMED中にモードとウェイポイントを設定します。
+2. Manualの場合は連続手動送信を有効にします。
+3. `ARM`で全プリフライト条件を確認します。
+4. `START`で物理出力を開始します。
+5. 通常停止は`STOP`、緊急時は`E-STOP`を使用します。
+
+ウェイポイント入力は1行に`緯度,経度`です。Web APIは最大16点、座標範囲、到達半径、リビジョン、CRCを検証し、制御側のACKを画面へ返します。
+
+## 記録
+
+SDが利用可能なら起動直後に新しいログを開始します。BNO08X、ToF、GNSS、INA226、VESC、AS5600、制御計算、物理PWM、状態遷移、通信診断を同一のBIN記録へ保存します。Web APIから記録開始・停止・一覧・ダウンロードも可能です。
+
+## 検証
+
+`tests/controller_test.cpp`は自動航行、ToF degraded、電源制限、拘束停止、危険pitch優先、サーボ変換、VESCランプを検証します。`tests/protocol_test.cpp`はCOBS＋CRC32往復、コマンド受付、重複排除、不正CRCのACKを検証します。GitHub Actionsでは両テストと、通信側・制御側のPlatformIOビルドを実行します。

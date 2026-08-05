@@ -1,0 +1,47 @@
+name: firmware
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Controller tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror
+          -Icontrol/lib/production_control/src
+          tests/controller_test.cpp
+          control/lib/production_control/src/production_control.cpp
+          control/lib/production_control/src/competition_actuators.cpp
+          -o controller_test && ./controller_test
+      - name: Protocol and command tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror
+          -Icontrol/lib/production_control/src
+          -Icontrol/lib/boat_protocol/src
+          tests/protocol_test.cpp
+          control/lib/production_control/src/production_control.cpp
+          control/lib/production_control/src/command_ingress.cpp
+          control/lib/production_control/src/command_replay.cpp
+          control/lib/boat_protocol/src/boat_protocol.cpp
+          -o protocol_test && ./protocol_test
+      - name: Protocol copies match
+        run: |
+          cmp control/lib/boat_protocol/src/boat_protocol.h communication/lib/boat_protocol/src/boat_protocol.h
+          cmp control/lib/boat_protocol/src/boat_protocol.cpp communication/lib/boat_protocol/src/boat_protocol.cpp
+
+  platformio:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        project: [control, communication]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install platformio==6.1.19
+      - run: pio run -d ${{ matrix.project }}
