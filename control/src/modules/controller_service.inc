@@ -63,7 +63,6 @@ bool productionPreflightReady(){
   const bool imuOk=imu.ready()&&estimated.attitudeHealth!=static_cast<uint8_t>(boat::EstimateHealth::Invalid)&&estimated.gyroAgeUs<=kBnoGyroStaleUs;
   const bool tofOk=tofReady&&lastTofUs&&now-lastTofUs<=kTofStateStaleUs;
   const bool powerOk=inaReady&&latestIna.valid&&lastInaUs&&now-lastInaUs<=kPowerStateStaleUs;
-  const bool rpmOk=as5600Ready&&latestRpm.valid&&lastRpmUs&&now-lastRpmUs<=kRpmStateStaleUs;
   const bool vescOk=vescValues.valid&&lastVescRxUs&&now-lastVescRxUs<=kVescStateStaleUs;
   const bool linkOk=lastHostHeartbeatMs&&millis()-lastHostHeartbeatMs<=kLinkFailSafeTimeoutMs;
   const bool navOk=competitionController.mode()!=production_control::ControlMode::AutoWaypoint||
@@ -72,7 +71,7 @@ bool productionPreflightReady(){
                       (competitionController.manualReceivedUs()&&now-competitionController.manualReceivedUs()<=500000ULL);
   const bool actuatorConfigOk=kCompetitionLeftChannel!=kCompetitionRightChannel&&kCompetitionLeftChannel!=kCompetitionRearChannel&&kCompetitionRightChannel!=kCompetitionRearChannel&&
                               kCompetitionServoMinUs<kCompetitionServoNeutralUs&&kCompetitionServoNeutralUs<kCompetitionServoMaxUs;
-  return pcaReady&&imuOk&&tofOk&&powerOk&&rpmOk&&vescOk&&linkOk&&navOk&&manualOk&&actuatorConfigOk;
+  return pcaReady&&imuOk&&tofOk&&powerOk&&vescOk&&linkOk&&navOk&&manualOk&&actuatorConfigOk;
 }
 
 void applyCompetitionActuators(const production_control::Output& output,uint64_t now){
@@ -109,9 +108,9 @@ void sendProductionTelemetry(const boat::EstimatedStatePayload& estimated,const 
   if(waypointGeoCount&&competitionOutput.activeWaypoint<waypointGeoCount){snapshot.targetWaypointLatitudeDeg=waypointGeo[competitionOutput.activeWaypoint].latitudeDeg;snapshot.targetWaypointLongitudeDeg=waypointGeo[competitionOutput.activeWaypoint].longitudeDeg;}
   linkSend(boat::Type::ControlSnapshot,reinterpret_cast<uint8_t*>(&snapshot),sizeof(snapshot));
   boat::InaStatusPayload power{};power.timestampUs=lastInaUs;power.ageUs=controlAge(lastInaUs,now);power.busVoltageV=latestIna.busV;power.shuntVoltageV=latestIna.shuntV;power.currentA=latestIna.currentRegA;power.powerW=latestIna.powerRegW;power.valid=latestIna.valid;power.errorCode=latestIna.valid?0:1;linkSend(boat::Type::InaStatus,reinterpret_cast<uint8_t*>(&power),sizeof(power));
-  boat::VescTelemetryPayload motor{};motor.timestampUs=lastVescRxUs;motor.ageUs=controlAge(lastVescRxUs,now);motor.inputVoltageV=vescValues.inputVoltageV;motor.motorCurrentA=vescValues.motorCurrentA;motor.inputCurrentA=vescValues.inputCurrentA;motor.duty=vescValues.duty;motor.erpm=vescValues.erpm;motor.mechanicalRpm=latestRpm.rpm;motor.mosTempC=vescValues.mosTempC;motor.motorTempC=vescValues.motorTempC;motor.tachometer=vescValues.tachometer;motor.valid=vescValues.valid;motor.mechanicalRpmValid=latestRpm.valid;motor.fault=vescValues.fault;linkSend(boat::Type::VescTelemetry,reinterpret_cast<uint8_t*>(&motor),sizeof(motor));
+  boat::VescTelemetryPayload motor{};motor.timestampUs=lastVescRxUs;motor.ageUs=controlAge(lastVescRxUs,now);motor.inputVoltageV=vescValues.inputVoltageV;motor.motorCurrentA=vescValues.motorCurrentA;motor.inputCurrentA=vescValues.inputCurrentA;motor.duty=vescValues.duty;motor.erpm=vescValues.erpm;motor.mosTempC=vescValues.mosTempC;motor.motorTempC=vescValues.motorTempC;motor.tachometer=vescValues.tachometer;motor.valid=vescValues.valid;motor.fault=vescValues.fault;linkSend(boat::Type::VescTelemetry,reinterpret_cast<uint8_t*>(&motor),sizeof(motor));
   boat::ActuatorStatePayload actuators{};actuators.timestampUs=now;actuators.pwmWrites=competitionPwmWrites;actuators.pwmErrors=competitionPwmErrors;actuators.leftPulseUs=competitionLeftPulseUs;actuators.rightPulseUs=competitionRightPulseUs;actuators.rearPulseUs=competitionRearPulseUs;actuators.targetDuty=vescTargetDuty;actuators.appliedDuty=vescAppliedDuty;actuators.pcaReady=pcaReady;actuators.outputsEnabled=!competitionOutputsOff;actuators.safetyState=static_cast<uint8_t>(safety);actuators.controlMode=static_cast<uint8_t>(competitionController.mode());linkSend(boat::Type::ActuatorState,reinterpret_cast<uint8_t*>(&actuators),sizeof(actuators));
-  boat::SystemHealthPayload health{};health.timestampUs=now;health.flags=(input.imuValid?1u:0u)|(input.tofValid?2u:0u)|(input.gnssValid?4u:0u)|(input.powerValid?8u:0u)|(input.rpmValid?16u:0u)|(input.vescValid?32u:0u)|(input.heartbeat?64u:0u);health.imuAgeUs=controlAge(input.imuUs,now);health.tofAgeUs=controlAge(input.tofUs,now);health.gnssAgeUs=controlAge(input.gnssUs,now);health.powerAgeUs=controlAge(input.powerUs,now);health.rpmAgeUs=controlAge(input.rpmUs,now);health.vescAgeUs=controlAge(input.vescUs,now);health.safetyState=static_cast<uint8_t>(safety);health.controlMode=static_cast<uint8_t>(competitionController.mode());health.stopReason=static_cast<uint8_t>(competitionOutput.reason);linkSend(boat::Type::SystemHealth,reinterpret_cast<uint8_t*>(&health),sizeof(health));
+  boat::SystemHealthPayload health{};health.timestampUs=now;health.flags=(input.imuValid?1u:0u)|(input.tofValid?2u:0u)|(input.gnssValid?4u:0u)|(input.powerValid?8u:0u)|(input.vescValid?16u:0u)|(input.heartbeat?32u:0u);health.imuAgeUs=controlAge(input.imuUs,now);health.tofAgeUs=controlAge(input.tofUs,now);health.gnssAgeUs=controlAge(input.gnssUs,now);health.powerAgeUs=controlAge(input.powerUs,now);health.vescAgeUs=controlAge(input.vescUs,now);health.safetyState=static_cast<uint8_t>(safety);health.controlMode=static_cast<uint8_t>(competitionController.mode());health.stopReason=static_cast<uint8_t>(competitionOutput.reason);linkSend(boat::Type::SystemHealth,reinterpret_cast<uint8_t*>(&health),sizeof(health));
 }
 
 void runProductionControl(){
@@ -122,8 +121,8 @@ void runProductionControl(){
   input.imuValid=imu.ready()&&estimated.attitudeHealth!=static_cast<uint8_t>(boat::EstimateHealth::Invalid)&&estimated.gyroAgeUs<=kBnoGyroStaleUs;input.imuUs=estimated.estimateUs;
   input.tofValid=tofReady&&estimated.heightHealth!=static_cast<uint8_t>(boat::EstimateHealth::Invalid)&&isfinite(estimated.waterDistanceM);input.tofUs=lastTofUs;
   input.gnssValid=navigation.valid&&navOriginSet;input.gnssUs=navigation.timestampUs;
-  input.powerValid=latestIna.valid;input.powerUs=lastInaUs;input.rpmValid=latestRpm.valid;input.rpmUs=lastRpmUs;input.vescValid=vescValues.valid;input.vescUs=lastVescRxUs;input.vescFault=vescValues.fault!=0;
-  input.rollRad=estimated.rollRad;input.pitchRad=estimated.pitchRad;input.yawRad=estimated.yawRad;input.rollRateRadS=estimated.rollRateRadS;input.pitchRateRadS=estimated.pitchRateRadS;input.yawRateRadS=estimated.yawRateRadS;input.tofM=estimated.waterDistanceM;input.northM=navNorthM;input.eastM=navEastM;input.groundSpeedMps=navigation.speedMps;input.courseRad=navigation.courseRad;input.busVoltageV=latestIna.busV;input.currentA=latestIna.currentRegA;input.powerW=latestIna.powerRegW;input.mechanicalRpm=latestRpm.rpm;input.vescErpm=vescValues.erpm;
+  input.powerValid=latestIna.valid;input.powerUs=lastInaUs;input.vescValid=vescValues.valid;input.vescUs=lastVescRxUs;input.vescFault=vescValues.fault!=0;
+  input.rollRad=estimated.rollRad;input.pitchRad=estimated.pitchRad;input.yawRad=estimated.yawRad;input.rollRateRadS=estimated.rollRateRadS;input.pitchRateRadS=estimated.pitchRateRadS;input.yawRateRadS=estimated.yawRateRadS;input.tofM=estimated.waterDistanceM;input.northM=navNorthM;input.eastM=navEastM;input.groundSpeedMps=navigation.speedMps;input.courseRad=navigation.courseRad;input.busVoltageV=latestIna.busV;input.currentA=latestIna.currentRegA;input.powerW=latestIna.powerRegW;input.vescErpm=vescValues.erpm;
   competitionOutput=competitionController.step(input);
   if(competitionOutput.safetyRequest==production_control::SafetyRequest::Fault&&safety==SafetyState::RUNNING){safeOutputs();setState(SafetyState::FAULT);}
   else if(competitionOutput.safetyRequest==production_control::SafetyRequest::Disarm&&safety==SafetyState::RUNNING)stop();
@@ -158,7 +157,7 @@ void control(){}
 void start(TestProfile){if(safety==SafetyState::ARMED_IDLE&&productionPreflightReady())setState(SafetyState::RUNNING);}
 void stop(){safeOutputs();profile=TestProfile::None;if(safety!=SafetyState::E_STOP)setState(SafetyState::DISARMED);}
 void command(const char* commandText){
-  if(!strcmp(commandText,"status"))Serial.printf("%s BNO=%d TOF=%d INA=%d AS5600=%d PCA=%d VESC=%d WP=%u writes=%lu\n",stateName(safety),imu.ready(),tofReady,inaReady,as5600Ready,pcaReady,vescValues.valid,competitionController.waypointCount(),static_cast<unsigned long>(competitionPwmWrites));
+  if(!strcmp(commandText,"status"))Serial.printf("%s BNO=%d TOF=%d INA=%d PCA=%d VESC=%d WP=%u writes=%lu\n",stateName(safety),imu.ready(),tofReady,inaReady,pcaReady,vescValues.valid,competitionController.waypointCount(),static_cast<unsigned long>(competitionPwmWrites));
   else if(!strcmp(commandText,"scan"))scan();
   else if(!strcmp(commandText,"arm")&&safety==SafetyState::DISARMED)setState(SafetyState::ARMED_IDLE);
   else if(!strcmp(commandText,"start")&&productionPreflightReady())setState(SafetyState::RUNNING);

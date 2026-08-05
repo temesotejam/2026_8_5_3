@@ -14,8 +14,7 @@ enum class StopReason : uint8_t {
   GnssInvalid=9, GnssStale=10, VescFault=11, NonFinite=12,
   FinalWaypoint=13, PowerInvalid=14, PowerStale=15,
   LowVoltage=16, OverCurrent=17, MotorStall=18,
-  AttitudeDanger=19, VescStale=20, RpmStale=21,
-  Cavitation=22
+  AttitudeDanger=19, VescStale=20, Cavitation=21
 };
 
 struct CommandResult {
@@ -30,14 +29,14 @@ struct Waypoint { float northM=0,eastM=0; };
 
 struct SensorInput {
   bool heartbeat=false,imuValid=false,tofValid=false,gnssValid=false;
-  bool powerValid=false,rpmValid=false,vescValid=false,vescFault=false;
+  bool powerValid=false,vescValid=false,vescFault=false;
   AuthoritativeSafety safety=AuthoritativeSafety::Disarmed;
   uint64_t nowUs=0,heartbeatUs=0,imuUs=0,tofUs=0,gnssUs=0;
-  uint64_t powerUs=0,rpmUs=0,vescUs=0;
+  uint64_t powerUs=0,vescUs=0;
   float rollRad=0,pitchRad=0,yawRad=0;
   float rollRateRadS=0,pitchRateRadS=0,yawRateRadS=0;
   float tofM=0,northM=0,eastM=0,groundSpeedMps=0,courseRad=0;
-  float busVoltageV=0,currentA=0,powerW=0,mechanicalRpm=0,vescErpm=0;
+  float busVoltageV=0,currentA=0,powerW=0,vescErpm=0;
 };
 
 struct PhysicalConfig {
@@ -60,11 +59,11 @@ struct Config {
   float highSpeedYawGain=.45f,highSpeedYawLimit=.35f;
   float lowVoltageV=9.5f,criticalVoltageV=8.5f;
   float overCurrentA=22.0f,criticalCurrentA=28.0f;
-  float stallCurrentA=8.0f,stallRpm=100.0f,stallCommand=.25f;
-  float cavitationRpm=4500.0f,cavitationCurrentA=2.0f,cavitationSpeedMps=.35f;
+  float stallCurrentA=8.0f,stallErpm=100.0f,stallCommand=.25f;
+  float cavitationErpm=4500.0f,cavitationCurrentA=2.0f,cavitationSpeedMps=.35f;
   uint32_t heartbeatStaleUs=500000,imuStaleUs=100000,tofStaleUs=250000;
   uint32_t gnssStaleUs=500000,manualStaleUs=500000,powerStaleUs=200000;
-  uint32_t rpmStaleUs=200000,vescStaleUs=300000,stallTripUs=1000000;
+  uint32_t vescStaleUs=300000,stallTripUs=1000000;
   PhysicalConfig physical{};
 };
 

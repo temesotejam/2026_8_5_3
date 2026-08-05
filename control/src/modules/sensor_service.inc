@@ -270,15 +270,6 @@ void pollIna() {
                sizeof(payload));
     }
   }
-  if (kEnableAs5600 &&
-      (!lastRpmPollUs || now - lastRpmPollUs >= kAs5600SampleUs)) {
-    lastRpmPollUs = now;
-    As5600Sample sample{};
-    if (as5600Ready && as5600.read(sample) && sample.valid) {
-      latestRpm = sample;
-      lastRpmUs = sample.timestampUs;
-    }
-  }
 }
 
 void pollVesc() {

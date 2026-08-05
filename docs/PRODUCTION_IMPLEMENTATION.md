@@ -2,7 +2,9 @@
 
 ## 構成
 
-通信側CoreS3はGNSSを受信し、100 ms周期で制御側へ送ります。制御側XIAOはBNO08X、ToF、INA226、AS5600、VESCを読み、本番制御器を50 Hzで実行します。全テレメトリは921600 bps、8N1、COBS＋CRC32でCoreS3へ戻り、SDとWeb画面へ同時に反映されます。
+通信側CoreS3はGNSSを受信し、100 ms周期で制御側へ送ります。制御側XIAOはBNO08X、ToF、INA226、VESCを読み、本番制御器を50 Hzで実行します。全テレメトリは921600 bps、8N1、COBS＋CRC32でCoreS3へ戻り、SDとWeb画面へ同時に反映されます。
+
+AS5600は使用しません。推進モータの回転状態はVESC UARTのERPMで監視します。モータの極対数が未確定のため、機械RPMへの推定換算は行いません。
 
 独自MahonyおよびESKFは実装・実行経路から削除しました。姿勢の唯一の正規入力はBNO08Xの`Rotation Vector`クォータニオンです。
 
@@ -22,7 +24,7 @@
 | D9 | 8 | VESC UART TX |
 | D10 | 9 | PCA9685 OE予約 |
 
-周辺I2CにはToF `0x29`、PCA9685 `0x40`、INA226 `0x44`、AS5600 `0x36`を接続します。BNO08Xは専用I2C `0x4A`（代替`0x4B`）です。
+周辺I2CにはToF `0x29`、PCA9685 `0x40`、INA226 `0x44`を接続します。BNO08Xは専用I2C `0x4A`（代替`0x4B`）です。
 
 ## 制御則
 
@@ -47,11 +49,11 @@ Auto Waypointでは現在位置から目標点への単純方位ではなく、�
 | サーボ変化速度 | 300 µs/s |
 | 低電圧制限／停止 | 9.5 V／8.5 V |
 | 過電流制限／停止 | 22 A／28 A |
-| 拘束判定 | 指令25%以上、8 A以上、100 rpm未満が1秒 |
+| 拘束判定 | 指令25%以上、8 A以上、VESC 100 ERPM未満が1秒 |
 
 ## 安全状態
 
-起動状態はDISARMEDです。ARM時にPCA9685、BNO08X、ToF、INA226、AS5600、VESC、CoreS3 heartbeat、および選択モードに必要な入力を確認します。Manual、Attitude Assist、Heading Holdでは500 ms以内の手動指令、Auto Waypointでは有効GNSSと1点以上の経路が必要です。
+起動状態はDISARMEDです。ARM時にPCA9685、BNO08X、ToF、INA226、VESC、CoreS3 heartbeat、および選択モードに必要な入力を確認します。Manual、Attitude Assist、Heading Holdでは500 ms以内の手動指令、Auto Waypointでは有効GNSSと1点以上の経路が必要です。AS5600はプリフライト条件に含みません。
 
 START後に次のどれかを検出すると、推進Dutyを即時0、PCA9685を全チャンネルFull OFFにします。
 
@@ -79,7 +81,7 @@ CoreS3のAP `BOAT-CONTROL`へ接続し、画面に表示されるIPアドレス�
 
 ## 記録
 
-SDが利用可能なら起動直後に新しいログを開始します。BNO08X、ToF、GNSS、INA226、VESC、AS5600、制御計算、物理PWM、状態遷移、通信診断を同一のBIN記録へ保存します。Web APIから記録開始・停止・一覧・ダウンロードも可能です。
+SDが利用可能なら起動直後に新しいログを開始します。BNO08X、ToF、GNSS、INA226、VESC（ERPM・Duty・電圧・電流・温度・fault）、制御計算、物理PWM、状態遷移、通信診断を同一のBIN記録へ保存します。Web APIから記録開始・停止・一覧・ダウンロードも可能です。
 
 ## 検証
 

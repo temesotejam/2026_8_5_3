@@ -9,7 +9,7 @@ constexpr char kFirmwareVersion[]="1.0.0-production";
 constexpr int kPeripheralSdaPin=D1,kPeripheralSclPin=D0;
 constexpr int kBnoRstPin=D2,kBnoIntPin=D3,kBnoSdaPin=D4,kBnoSclPin=D5;
 constexpr int kLinkRxPin=D6,kLinkTxPin=D7,kVescRxPin=D8,kVescTxPin=D9,kFuturePcaOePin=D10;
-constexpr uint8_t kBnoAddress=0x4A,kBnoAlternateAddress=0x4B,kTofAddress=0x29,kInaAddress=0x44,kPcaAddress=0x40,kAs5600Address=0x36;
+constexpr uint8_t kBnoAddress=0x4A,kBnoAlternateAddress=0x4B,kTofAddress=0x29,kInaAddress=0x44,kPcaAddress=0x40;
 constexpr uint32_t kBnoI2cHz=100000UL,kPeripheralI2cHz=experiment_config::kPeripheralI2cHz,kAccelGyroIntervalUs=20000UL,kRotationIntervalUs=20000UL,kMagneticIntervalUs=50000UL;
 constexpr uint16_t kBnoEventQueueDepth=96; constexpr uint8_t kBnoServiceCallBudget=8;
 // The TX drain must preempt active-INT BNO servicing on the same core.
@@ -22,7 +22,7 @@ constexpr uint32_t kLinkBaud=921600UL,kProtocolVersion=1,kLinkHeartbeatTimeoutMs
 constexpr bool kBenchmarkEnable=false,kReplayEnable=false,kCompetitionControlEnable=true;
 constexpr bool kCompetitionHardwareEnable=true,kDryRunActuators=false;
 constexpr bool kPhysicalOutputCompileEnabled=true;
-constexpr bool kEnableIna226=true,kEnableAs5600=true;
+constexpr bool kEnableIna226=true;
 constexpr uint32_t kGnssNavExpectedIntervalMs=100UL,kControlHeartbeatIntervalMs=100UL,kLinkFailSafeTimeoutMs=500UL;
 // Production linkage calibration. Normalized -1..+1 spans the usable mechanical range.
 constexpr uint8_t kCompetitionLeftChannel=0,kCompetitionRightChannel=1,kCompetitionRearChannel=2;
@@ -38,8 +38,9 @@ constexpr float kTofMaxSpreadM=0.25f;
 constexpr bool kEnableTemporaryDebugWifi=false; constexpr char kDebugApSsid[]="XIAO-BOAT-DEBUG",kDebugApPass[]="12345678"; constexpr uint16_t kDebugHttpPort=80;
 constexpr uint16_t kInaConfig=0x08DF,kInaCalibration=0x0800; constexpr uint16_t kConfig=kInaConfig,kCalibration=kInaCalibration; constexpr float kShuntOhm=0.002f,kCurrentLsbA=0.00125f,kPowerLsbW=0.03125f;
 constexpr bool kEnableOverCurrentTrip=true,kEnableLowVoltageTrip=true; constexpr float kOverCurrentTripA=22.0f,kCriticalCurrentTripA=28.0f,kLowVoltageTripV=9.5f,kCriticalVoltageTripV=8.5f;
-constexpr uint32_t kAs5600SampleUs=20000UL,kPowerStateStaleUs=200000UL,kVescStateStaleUs=300000UL,kRpmStateStaleUs=200000UL;
-constexpr float kAs5600GearRatio=1.0f,kStallCurrentA=8.0f,kStallRpm=100.0f,kCavitationRpm=4500.0f,kCavitationCurrentA=2.0f,kCavitationSpeedMps=0.35f;
+constexpr uint32_t kPowerStateStaleUs=200000UL,kVescStateStaleUs=300000UL;
+// VESC reports electrical RPM (ERPM). No external shaft-angle sensor is used.
+constexpr float kStallCurrentA=8.0f,kStallErpm=100.0f,kCavitationErpm=4500.0f,kCavitationCurrentA=2.0f,kCavitationSpeedMps=0.35f;
 constexpr uint32_t kDiagnosticIntervalMs=1000UL,kBnoNoDataTimeoutMs=3000UL,kReinitIntervalMs=2000UL;
 constexpr uint16_t kLinkMaxPayload=768,kLinkTxQueueDepth=64;
 constexpr uint16_t kLinkRxByteBudget=512;
