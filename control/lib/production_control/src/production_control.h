@@ -18,8 +18,14 @@ enum class StopReason : uint8_t {
   Cavitation=22
 };
 
-struct CommandResult { Ack ack=Ack::Accepted; uint16_t reason=0; };
-struct ManualCommand { float leftFront=0,rightFront=0,rearYaw=0,propulsion=0; };
+struct CommandResult {
+  Ack ack; uint16_t reason;
+  constexpr CommandResult(Ack value=Ack::Accepted,uint16_t why=0):ack(value),reason(why){}
+};
+struct ManualCommand {
+  float leftFront,rightFront,rearYaw,propulsion;
+  constexpr ManualCommand(float left=0,float right=0,float rear=0,float thrust=0):leftFront(left),rightFront(right),rearYaw(rear),propulsion(thrust){}
+};
 struct Waypoint { float northM=0,eastM=0; };
 
 struct SensorInput {
