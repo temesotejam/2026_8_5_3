@@ -22,6 +22,7 @@ constexpr uint32_t kLinkBaud=921600UL,kProtocolVersion=1,kLinkHeartbeatTimeoutMs
 constexpr bool kBenchmarkEnable=false,kReplayEnable=false,kCompetitionControlEnable=true;
 constexpr bool kCompetitionHardwareEnable=true,kDryRunActuators=false;
 constexpr bool kPhysicalOutputCompileEnabled=true;
+constexpr bool kEnableIna226=true,kEnableAs5600=true;
 constexpr uint32_t kGnssNavExpectedIntervalMs=100UL,kControlHeartbeatIntervalMs=100UL,kLinkFailSafeTimeoutMs=500UL;
 // Production linkage calibration. Normalized -1..+1 spans the usable mechanical range.
 constexpr uint8_t kCompetitionLeftChannel=0,kCompetitionRightChannel=1,kCompetitionRearChannel=2;
