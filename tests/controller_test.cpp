@@ -12,13 +12,13 @@ SensorInput nominal(uint64_t now=1'000'000) {
   input.safety=AuthoritativeSafety::Running;
   input.nowUs=now;
   input.heartbeat=input.imuValid=input.tofValid=input.gnssValid=true;
-  input.powerValid=input.rpmValid=input.vescValid=true;
+  input.powerValid=input.vescValid=true;
   input.heartbeatUs=input.imuUs=input.tofUs=input.gnssUs=now;
-  input.powerUs=input.rpmUs=input.vescUs=now;
+  input.powerUs=input.vescUs=now;
   input.tofM=.45f;
   input.busVoltageV=12.0f;
   input.currentA=3.0f;
-  input.mechanicalRpm=1000.0f;
+  input.vescErpm=1000.0f;
   input.groundSpeedMps=1.0f;
   return input;
 }
@@ -72,11 +72,11 @@ void testStallAndPitchProtection() {
   controller.setManual({0,0,0,.8f},1'000'000);
   auto input=nominal();
   input.currentA=10.0f;
-  input.mechanicalRpm=0;
+  input.vescErpm=0;
   auto output=controller.step(input);
   assert(output.safetyRequest==SafetyRequest::None);
   input.nowUs=2'100'001;
-  input.heartbeatUs=input.powerUs=input.rpmUs=input.vescUs=input.imuUs=input.tofUs=input.gnssUs=input.nowUs;
+  input.heartbeatUs=input.powerUs=input.vescUs=input.imuUs=input.tofUs=input.gnssUs=input.nowUs;
   controller.setManual({0,0,0,.8f},input.nowUs);
   output=controller.step(input);
   assert(output.safetyRequest==SafetyRequest::Fault);
