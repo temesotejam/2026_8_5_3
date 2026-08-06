@@ -90,9 +90,9 @@ void applyCompetitionActuators(const production_control::Output& output,uint64_t
   const bool leftEnabled=output.enabledMask&production_control::ManualLeft;
   const bool rightEnabled=output.enabledMask&production_control::ManualRight;
   const bool rearEnabled=output.enabledMask&production_control::ManualRear;
-  const auto left=leftEnabled?competitionLeftServo.map(output.leftFront,dt):production_control::ServoResult{};
-  const auto right=rightEnabled?competitionRightServo.map(output.rightFront,dt):production_control::ServoResult{};
-  const auto rear=rearEnabled?competitionRearServo.map(output.rearYaw,dt):production_control::ServoResult{};
+  const auto left=leftEnabled?competitionLeftServo.map(output.leftFront):production_control::ServoResult{};
+  const auto right=rightEnabled?competitionRightServo.map(output.rightFront):production_control::ServoResult{};
+  const auto rear=rearEnabled?competitionRearServo.map(output.rearYaw):production_control::ServoResult{};
   if(!leftEnabled)competitionLeftServo.reset();if(!rightEnabled)competitionRightServo.reset();if(!rearEnabled)competitionRearServo.reset();
   bool ok=pcaReady&&left.finite&&right.finite&&rear.finite;
   if(ok){
