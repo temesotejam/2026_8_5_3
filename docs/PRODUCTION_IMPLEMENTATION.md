@@ -104,10 +104,14 @@ CoreS3のAP `BOAT-CONTROL`へ接続し、画面に表示されるIPアドレス�
 
 ブラウザは`開始`、`停止`、`緊急停止`という単発要求だけをCoreS3へ送ります。ブラウザ側JavaScriptはARMやSTARTを直接並べて送らないため、手動指令の実送信前にARMが追い越すことはありません。
 
-## 現在外している通信側機能
+## SD自動記録
 
-SD自動記録、時刻同期、任意座標編集、BNO転送診断、ベンチマークAPIは現行CoreS3ビルドから外しています。GNSS受信と固定Waypoint選択は復帰済みです。大会運用前に必須のSD記録は、成立済みの統合運転経路と分離したモジュールとして再追加します。
+CoreS3起動時に内蔵microSDを初期化し、`/BOATLOG/RUN0001.BIN`から未使用の連番ファイルを自動作成します。XIAOから受信した全プロトコルフレームに加え、CoreS3から送ったGNSS・heartbeat・制御／安全指令も同じ時系列で記録します。従来のBOATLOGバイナリ形式を維持し、方向はプロトコルヘッダーのログ用フラグ（XIAO→CoreS3=`0x4000`、CoreS3→XIAO=`0x8000`）で識別します。
+
+SD書込みはUART受信タスクと分離した低優先度タスクで行い、8 KiBバッファへまとめ、1秒ごととSTOP／E-STOP時にflushします。Web画面とCoreS3画面にはファイル名・レコード数・欠落数・書込み異常を表示します。microSDを初期化できない場合やログファイルを開けない場合は開始操作を拒否し、運転中に書込み不能となった場合はSTOP指令を送ります。
+
+時刻同期、任意座標編集、BNO転送診断、ベンチマークAPIは現行CoreS3ビルドから外しています。GNSS受信と固定Waypoint選択は復帰済みです。
 
 ## 検証
 
-`tests/controller_test.cpp`は自動航行、ToF degraded、電源制限、拘束停止、危険pitch優先、サーボ変換、VESCランプを検証します。`tests/protocol_test.cpp`はCOBS＋CRC32往復、コマンド受付、重複排除、不正CRCのACKを検証します。GitHub Actionsでは両テストと、通信側・制御側のPlatformIOビルドを実行します。
+`tests/controller_test.cpp`は自動航行、ToF degraded、電源制限、拘束停止、サーボ変換、VESCランプを検証します。`tests/protocol_test.cpp`はCOBS＋CRC32往復、コマンド受付、重複排除、不正CRCのACKを検証します。`tests/bin_record_serializer_test.cpp`はBOATLOGレコードの生成、長さ、magic、payload保持、不正長拒否を検証します。GitHub Actionsでは各ホスト試験と、通信側・制御側のPlatformIOビルドを実行します。

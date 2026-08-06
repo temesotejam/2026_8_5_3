@@ -15,6 +15,7 @@
 #include "fixed_waypoints.h"
 #include "gnss_receiver.h"
 #include "production_page_ja.h"
+#include "sd_logger.h"
 #include <boat_protocol.h>
 
 using namespace app_config;
@@ -263,7 +264,9 @@ bool sendFrame(boat::Type type, const void* payload, uint16_t length) {
   uint8_t encoded[boat::kMaxEncoded]{};
   const size_t bytes = boat::encode(
       header, static_cast<const uint8_t*>(payload), encoded, sizeof(encoded));
-  return bytes && controlUart.write(encoded, bytes) == bytes;
+  if (!bytes || controlUart.write(encoded, bytes) != bytes) return false;
+  sd_logging::recordOutbound(header, payload, nowUs());
+  return true;
 }
 
 bool gnssFixFresh() {
@@ -522,6 +525,16 @@ void serviceOperation() {
   const uint8_t safety = currentSafety(cache);
   const uint32_t current = millis();
 
+  const bool operationRequiresLog =
+      stage == Stage::EnsureDisarmed || stage == Stage::WaitWaypointAck ||
+      stage == Stage::WaitModeAck || stage == Stage::WaitManualAck ||
+      stage == Stage::WaitArmed || stage == Stage::WaitRunning ||
+      stage == Stage::Running;
+  if (operationRequiresLog && !sd_logging::status().active) {
+    failOperation("SDログが停止したため、安全に運転を停止しました。");
+    return;
+  }
+
   if (stage != Stage::Idle && stage != Stage::Error && !connected) {
     failOperation("XIAOとの通信が途切れたため停止指令を送りました。");
     return;
@@ -673,6 +686,7 @@ void serviceOperation() {
 void processFrame(const boat::Frame& frame) {
   const boat::Type type = static_cast<boat::Type>(frame.header.type);
   const uint64_t receivedUs = nowUs();
+  sd_logging::recordInbound(frame, receivedUs);
   portENTER_CRITICAL(&cacheMux);
   linkCache.lastFrameUs = receivedUs;
   ++linkCache.frames;
@@ -798,6 +812,11 @@ void sendJsonResult(int code, bool accepted, const char* message) {
 void apiStart() {
   ManualValues values{};
   OperationConfig requested{};
+  const sd_logging::Status logStatus = sd_logging::status();
+  if (!logStatus.active) {
+    sendJsonResult(503, false, "SDログを開始できていません。microSDを確認してください。");
+    return;
+  }
   if (!parseManualValues(values)) {
     sendJsonResult(400, false, "手動出力値が不正です。");
     return;
@@ -871,6 +890,7 @@ void apiStop() {
   sendSafety(boat::Type::Stop);
   sendManualOff();
   setStage(Stage::Stopping, "停止を確認しています。");
+  sd_logging::requestFlush();
   sendJsonResult(202, true, "停止指令を送りました。");
 }
 
@@ -879,6 +899,7 @@ void apiEstop() {
   sendSafety(boat::Type::Estop);
   sendManualOff();
   setStage(Stage::Emergency, "緊急停止指令を送りました。");
+  sd_logging::requestFlush();
   sendJsonResult(202, true, "緊急停止指令を送りました。");
 }
 
@@ -899,8 +920,9 @@ void apiStatus() {
   const uint32_t linkAge = ageMs(cache.lastFrameUs, nowUs());
   const uint8_t safety = currentSafety(cache);
   const auto& fix=gnssRx.latest();
+  const sd_logging::Status logStatus = sd_logging::status();
   const fixed_waypoints::Point* target=fixed_waypoints::byIndex(operation.targetIndex);
-  char body[2300];
+  char body[2600];
   snprintf(
       body, sizeof(body),
       "{\"connected\":%s,\"ever_received\":%s,\"age_ms\":%lu,"
@@ -922,6 +944,9 @@ void apiStatus() {
       "\"target_duty\":%.3f,\"applied_duty\":%.3f},"
       "\"sensors\":{\"imu_valid\":%u,\"roll_rad\":%.4f,\"pitch_rad\":%.4f,"
       "\"yaw_rad\":%.4f,\"tof_valid\":%u,\"tof_m\":%.3f},"
+      "\"log\":{\"sd_ready\":%s,\"active\":%s,\"fault\":%s,"
+      "\"file\":\"%s\",\"records\":%lu,\"dropped\":%lu,"
+      "\"write_errors\":%lu,\"queue\":%u,\"queue_high_water\":%u},"
       "\"link\":{\"frames\":%lu,\"crc_errors\":%lu,\"cobs_errors\":%lu,"
       "\"length_errors\":%lu}}",
       connected ? "true" : "false", cache.lastFrameUs ? "true" : "false",
@@ -960,6 +985,13 @@ void apiStatus() {
       cache.hasSnapshot ? cache.snapshot.yawRad : 0.0f,
       static_cast<unsigned>(cache.hasSnapshot ? cache.snapshot.tofValid : 0),
       cache.hasSnapshot ? cache.snapshot.tofFilteredM : 0.0f,
+      logStatus.cardReady ? "true" : "false",
+      logStatus.active ? "true" : "false", logStatus.fault ? "true" : "false",
+      logStatus.fileName, static_cast<unsigned long>(logStatus.records),
+      static_cast<unsigned long>(logStatus.dropped),
+      static_cast<unsigned long>(logStatus.writeErrors),
+      static_cast<unsigned>(logStatus.queueDepth),
+      static_cast<unsigned>(logStatus.queueHighWater),
       static_cast<unsigned long>(cache.frames), static_cast<unsigned long>(crcErrors),
       static_cast<unsigned long>(cobsErrors), static_cast<unsigned long>(lengthErrors));
   web.send(200, "application/json; charset=utf-8", body);
@@ -984,13 +1016,18 @@ void drawScreen() {
   const LinkCache cache = cacheSnapshot();
   const bool connected = linkConnected(cache);
   const uint8_t safety = currentSafety(cache);
+  const sd_logging::Status logStatus = sd_logging::status();
   M5.Display.fillScreen(0x0000);
   M5.Display.setTextColor(0xFFFF, 0x0000);
   M5.Display.setTextSize(1);
   M5.Display.setCursor(6, 6);
   const auto& fix=gnssRx.latest();
   const fixed_waypoints::Point* target=fixed_waypoints::byIndex(operation.targetIndex);
-  M5.Display.printf("CORES3 AUTO SELECT 4.0\n");
+  M5.Display.printf("CORES3 AUTO SELECT 4.1\n");
+  M5.Display.printf("SD %s  LOG %s  rec %lu\n",
+                    logStatus.cardReady ? "OK" : "ERR",
+                    logStatus.active ? logStatus.fileName : "STOP",
+                    static_cast<unsigned long>(logStatus.records));
   M5.Display.printf("LINK %s  age %lu ms  frames %lu\n",
                     connected ? "OK" : "WAIT",
                     static_cast<unsigned long>(ageMs(cache.lastFrameUs, nowUs())),
@@ -1039,13 +1076,16 @@ void setup() {
   controlUart.setRxBufferSize(16384);
   controlUart.setTimeout(2);
   controlUart.begin(kControlUartBaud, SERIAL_8N1, kControlUartRxPin, kControlUartTxPin);
+  const bool sdLogReady = sd_logging::begin();
   xTaskCreatePinnedToCore(controlRxTask, "ControlRx", 6144, nullptr, 3, &rxTaskHandle, 1);
   startWeb();
   drawScreen();
 
-  Serial.printf("%s %s GNSS_RX=%d GNSS_TX=%d CONTROL_RX=%d CONTROL_TX=%d baud=%lu AP=%s URL=http://%s/\n",
+  const sd_logging::Status logStatus = sd_logging::status();
+  Serial.printf("%s %s GNSS_RX=%d GNSS_TX=%d CONTROL_RX=%d CONTROL_TX=%d baud=%lu SD=%d LOG=%s AP=%s URL=http://%s/\n",
                 kFirmwareName, kFirmwareVersion, kGnssRxPin,kGnssTxPin,
-                kControlUartRxPin, kControlUartTxPin,static_cast<unsigned long>(kControlUartBaud), kApSsid,
+                kControlUartRxPin, kControlUartTxPin,static_cast<unsigned long>(kControlUartBaud),
+                sdLogReady ? 1 : 0, logStatus.fileName, kApSsid,
                 WiFi.softAPIP().toString().c_str());
 }
 

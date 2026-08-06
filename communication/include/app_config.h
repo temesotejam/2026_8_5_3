@@ -2,7 +2,7 @@
 #include <Arduino.h>
 namespace app_config {
 constexpr char kFirmwareName[] = "cores3-telemetry-bridge";
-constexpr char kFirmwareVersion[] = "3.0.2-no-attitude-trip";
+constexpr char kFirmwareVersion[] = "3.1.0-sd-log-restored";
 // CoreS3 Port C: GNSS TX connects to GPIO18 (CoreS3 RX). GPIO17 is reserved as TX.
 constexpr int kGnssRxPin = 18, kGnssTxPin = 17;
 // CoreS3 Port B: GPIO8 is receiver and GPIO9 is transmitter for the control XIAO link.
@@ -13,6 +13,10 @@ constexpr uint16_t kGnssUartRxBufferBytes = 2048, kGnssReadBudgetBytes = 512;
 constexpr uint16_t kGnssInputLineChars = 127, kGnssMaxSentenceChars = 110;
 constexpr uint32_t kGnssSentenceTimeoutMs = 500UL, kGnssNoDataTimeoutMs = 1500UL;
 constexpr uint32_t kGnssNavIntervalMs = 100UL;
+// CoreS3 built-in microSD (same wiring used by the validated measurement firmware).
+constexpr int kSdCsPin = 4, kSdSckPin = 36, kSdMisoPin = 35, kSdMosiPin = 37;
+constexpr uint32_t kSdFrequencyHz = 10000000UL;
+constexpr char kLogDirectory[] = "/BOATLOG";
 constexpr char kApSsid[] = "BOAT-CONTROL", kApPassword[] = "12345678";
 constexpr uint16_t kHttpPort = 80;
 }

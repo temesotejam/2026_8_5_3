@@ -75,15 +75,25 @@ jobs:
           communication/src/gnss_receiver.cpp
           -o gnss_receiver_test && ./gnss_receiver_test
 
+      - name: CoreS3 binary log format tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror
+          -Icommunication/lib/boat_protocol/src
+          -Icommunication/lib/bin_record_serializer/src
+          tests/bin_record_serializer_test.cpp
+          -o bin_record_serializer_test && ./bin_record_serializer_test
+
       - name: CoreS3 host syntax and format checks
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror -DARDUINO
           -Itests/stubs
           -Icommunication/include
           -Icommunication/lib/boat_protocol/src
+          -Icommunication/lib/bin_record_serializer/src
           -fsyntax-only
           communication/src/main.cpp
           communication/src/gnss_receiver.cpp
+          communication/src/sd_logger.cpp
 
       - name: Protocol copies match
         run: |

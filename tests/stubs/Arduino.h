@@ -12,6 +12,9 @@ constexpr int D0=0,D1=1,D2=2,D3=3,D4=4,D5=5,D6=6,D7=7,D8=8,D9=9,D10=10;
 using TaskHandle_t=void*;
 using portMUX_TYPE=int;
 using UBaseType_t=unsigned int;
+using BaseType_t=int;
+constexpr BaseType_t pdPASS=1;
+constexpr int pdTRUE=1;
 
 class String {
  public:
@@ -56,3 +59,5 @@ inline void portEXIT_CRITICAL(portMUX_TYPE*){}
 inline uint32_t pdMS_TO_TICKS(uint32_t value){return value;}
 inline void vTaskDelay(uint32_t){}
 inline int xTaskCreatePinnedToCore(void(*)(void*),const char*,uint32_t,void*,int,TaskHandle_t*,int){return 1;}
+inline void xTaskNotifyGive(TaskHandle_t){}
+inline uint32_t ulTaskNotifyTake(int,uint32_t){return 0;}
