@@ -41,6 +41,7 @@ void vescDutyRaw(float duty){
 }
 void safeOutputs(){
   vescTargetDuty=vescAppliedDuty=0.0f;vescRamp.stopImmediate();vescDutyRaw(0);
+  competitionLeftSpikeFilter.reset();competitionRightSpikeFilter.reset();
   if(kPhysicalOutputCompileEnabled&&pcaReady&&!competitionOutputsOff){if(pca.allOff())competitionPwmWrites+=16;else ++competitionPwmErrors;}
   competitionOutputsOff=true;competitionLeftPulseUs=competitionRightPulseUs=competitionRearPulseUs=0;servoOutput=kServoCenterUs;
 }

@@ -227,6 +227,16 @@ void testActuatorMapping() {
   assert(!motorRelayRequired(NAN));
 }
 
+void testServoSpikeFilter() {
+  ServoSpikeFilter filter(.10f);
+  assert(std::fabs(filter.apply(.05f)-.05f)<1e-6f);  // Small change is immediate.
+  filter.reset();
+  assert(filter.apply(.50f)==0);                    // One large frame is held.
+  assert(filter.apply(0)==0);                       // A transient spike is rejected.
+  assert(filter.apply(.50f)==0);
+  assert(std::fabs(filter.apply(.45f)-.45f)<1e-6f); // Same-direction second frame confirms.
+}
+
 void testPartialManualWithoutSensors() {
   Controller controller;
   controller.setManual({.75f,-.5f,.4f,.8f,ManualLeft},1'000'000);
@@ -298,6 +308,7 @@ int main() {
   testPowerProtection();
   testStallAndPitchProtection();
   testActuatorMapping();
+  testServoSpikeFilter();
   testPartialManualWithoutSensors();
   testServoOnlyManualIgnoresUnrelatedSensorTrips();
   testFullManualWithPropulsion();
