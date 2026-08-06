@@ -206,9 +206,15 @@ void testStallAndPitchProtection() {
 }
 
 void testActuatorMapping() {
-  ServoMapper mapper(ServoTuning(1200,1500,1800,300,false));
-  auto result=mapper.map(1.0f,1.0f);
-  assert(result.pulseUs==1530);  // dt is intentionally capped at 0.1 s.
+  ServoMapper mapper(ServoTuning(1200,1500,1800,false));
+  auto result=mapper.map(.5f);
+  assert(result.pulseUs==1650);  // No servo rate limit: one 50 Hz update.
+  result=mapper.map(-.5f);
+  assert(result.pulseUs==1350);
+  result=mapper.map(1.5f);
+  assert(result.pulseUs==1800);
+  assert(result.clamped);
+
   DutyRamp ramp(.6f,2.0f,.35f);
   ramp.setTarget(.6f);
   const float first=ramp.step(.02f);
@@ -276,9 +282,9 @@ void testFullManualWithPropulsion() {
   assert(output.safetyRequest==SafetyRequest::None);
   assert(output.physicalGate);
   assert(output.enabledMask==ManualAll);
-  assert(output.leftFront>0);
-  assert(output.rightFront<0);
-  assert(output.rearYaw>0);
+  assert(output.leftFront==.5f);
+  assert(output.rightFront==-.4f);
+  assert(output.rearYaw==.3f);
   assert(output.propulsion>0);
   assert(!(output.flags&PropulsionUnavailable));
 }

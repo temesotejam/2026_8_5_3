@@ -5,7 +5,7 @@
 namespace app_config {
 
 constexpr char kFirmwareName[]="xiao-boat-control-integration";
-constexpr char kFirmwareVersion[]="1.2.2-no-attitude-trip";
+constexpr char kFirmwareVersion[]="1.2.3-direct-servo-command";
 constexpr int kPeripheralSdaPin=D1,kPeripheralSclPin=D0;
 constexpr int kBnoRstPin=D2,kBnoIntPin=D3,kBnoSdaPin=D4,kBnoSclPin=D5;
 constexpr int kLinkRxPin=D6,kLinkTxPin=D7,kVescRxPin=D8,kVescTxPin=D9,kMotorRelayPin=D10;
@@ -27,7 +27,7 @@ constexpr bool kEnableIna226=true;
 constexpr uint32_t kGnssNavExpectedIntervalMs=100UL,kControlHeartbeatIntervalMs=100UL,kLinkFailSafeTimeoutMs=500UL;
 // Production linkage calibration. Normalized -1..+1 spans the usable mechanical range.
 constexpr uint8_t kCompetitionLeftChannel=0,kCompetitionRightChannel=1,kCompetitionRearChannel=2;
-constexpr float kCompetitionServoMinUs=1200.0f,kCompetitionServoNeutralUs=1500.0f,kCompetitionServoMaxUs=1800.0f,kCompetitionServoRateUsPerSecond=300.0f;
+constexpr float kCompetitionServoMinUs=1200.0f,kCompetitionServoNeutralUs=1500.0f,kCompetitionServoMaxUs=1800.0f;
 constexpr bool kCompetitionLeftReversed=false,kCompetitionRightReversed=false,kCompetitionRearReversed=false;
 constexpr float kCompetitionKpPitch=0.80f,kCompetitionKdPitch=0.10f,kCompetitionKpRoll=1.25f,kCompetitionKdRoll=0.22f,kCompetitionKpHeight=0.75f,kCompetitionKpYaw=0.90f,kCompetitionKdYaw=0.12f;
 constexpr float kCompetitionTargetHeightM=0.45f,kCompetitionAutoPropulsion=0.55f,kCompetitionWaypointReachM=1.5f,kCompetitionLosLookaheadM=4.0f;

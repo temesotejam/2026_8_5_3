@@ -175,9 +175,10 @@ Output Controller::step(const SensorInput& input){
   }else stallStartUs_=0;
 
   output.propulsionPrelimit=clampf(output.propulsionPrelimit,0.0f,output.throttleLimit);
-  output.leftFront=limit(output.leftPrelimit,previous_[0],output.saturated);
-  output.rightFront=limit(output.rightPrelimit,previous_[1],output.saturated);
-  output.rearYaw=limit(output.rearPrelimit,previous_[2],output.saturated);
+  output.leftFront=clampf(output.leftPrelimit,-1.0f,1.0f);
+  output.rightFront=clampf(output.rightPrelimit,-1.0f,1.0f);
+  output.rearYaw=clampf(output.rearPrelimit,-1.0f,1.0f);
+  if(output.leftFront!=output.leftPrelimit||output.rightFront!=output.rightPrelimit||output.rearYaw!=output.rearPrelimit)output.saturated=true;
   output.propulsion=limit(output.propulsionPrelimit,previous_[3],output.saturated);
   if(output.propulsion<0)output.propulsion=0;
   previous_[0]=output.leftFront;previous_[1]=output.rightFront;previous_[2]=output.rearYaw;previous_[3]=output.propulsion;
