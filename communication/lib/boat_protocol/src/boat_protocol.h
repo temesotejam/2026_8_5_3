@@ -22,6 +22,7 @@ struct __attribute__((packed)) SystemHealthPayload { uint64_t timestampUs; uint3
 struct __attribute__((packed)) WaypointGeo { double latitudeDeg,longitudeDeg; };
 struct __attribute__((packed)) WaypointSetPayload { uint32_t requestId,revision; uint8_t action,count,reserved[2]; float reachRadiusM; WaypointGeo points[16]; uint32_t canonicalCrc; };
 struct __attribute__((packed)) WaypointAckPayload { uint32_t requestId,revision; uint8_t status,reason,activeIndex,count; uint32_t canonicalCrc; };
+enum ControlModeId:uint8_t{ControlManual=0,ControlAttitudeAssist=1,ControlHeadingHold=2,ControlAutoWaypoint=3,ControlWaypointOnly=4};
 struct __attribute__((packed)) ControlModeCommandPayload { uint8_t protocolVersion,mode; uint16_t reserved; uint32_t requestId,commandSequence; uint64_t sourceUs; uint32_t canonicalCrc; };
 struct __attribute__((packed)) ManualCommandPayload { uint8_t protocolVersion,reserved[3]; uint32_t requestId,commandSequence; uint64_t sourceUs; float leftFrontWing,rightFrontWing,rearYaw,propulsion; uint32_t canonicalCrc; };
 enum ManualOutputMask:uint8_t{ManualLeft=1u<<0,ManualRight=1u<<1,ManualRear=1u<<2,ManualPropulsion=1u<<3,ManualAll=ManualLeft|ManualRight|ManualRear|ManualPropulsion};

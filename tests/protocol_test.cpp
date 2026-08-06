@@ -41,6 +41,11 @@ int main(){
   assert(fullManualAccepted.ackGenerated&&fullManualAccepted.result.ack==production_control::Ack::Accepted);
   assert(controller.manualOutputMask()==production_control::ManualAll);
 
+  boat::ControlModeCommandPayload waypointOnly{};waypointOnly.protocolVersion=boat::kVersion;waypointOnly.mode=boat::ControlWaypointOnly;waypointOnly.requestId=13;waypointOnly.commandSequence=4;waypointOnly.sourceUs=2380;waypointOnly.canonicalCrc=boat::canonicalCrc(&waypointOnly,offsetof(boat::ControlModeCommandPayload,canonicalCrc));
+  auto waypointAccepted=ingress.process(commandFrame(boat::Type::ControlModeCommand,&waypointOnly,sizeof(waypointOnly)),production_control::AuthoritativeSafety::Disarmed,controller,2390);
+  assert(waypointAccepted.ackGenerated&&waypointAccepted.result.ack==production_control::Ack::Accepted);
+  assert(controller.mode()==production_control::ControlMode::WaypointOnly);
+
   manual.canonicalCrc^=1;
   auto rejected=ingress.process(commandFrame(boat::Type::ManualCommand,&manual,sizeof(manual)),production_control::AuthoritativeSafety::Disarmed,controller,2400);
   assert(rejected.ackGenerated&&rejected.result.ack==production_control::Ack::Rejected);

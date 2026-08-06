@@ -23,7 +23,7 @@ bool Controller::fresh(bool valid,uint64_t timestamp,uint64_t now,uint32_t maxAg
 }
 CommandResult Controller::setMode(ControlMode mode,uint32_t,AuthoritativeSafety safety){
   if(safety!=AuthoritativeSafety::Disarmed)return{Ack::Rejected,1};
-  if(static_cast<uint8_t>(mode)>3)return{Ack::Rejected,2};
+  if(static_cast<uint8_t>(mode)>static_cast<uint8_t>(ControlMode::WaypointOnly))return{Ack::Rejected,2};
   mode_=mode;headingSet_=false;stallStartUs_=0;
   return{Ack::Accepted,0};
 }
@@ -88,10 +88,12 @@ Output Controller::step(const SensorInput& input){
   if(input.safety!=AuthoritativeSafety::Running){safe(output,input.safety==AuthoritativeSafety::EStop?StopReason::EStop:StopReason::None,SafetyRequest::None);return output;}
   if(!fresh(input.heartbeat,input.heartbeatUs,input.nowUs,config_.heartbeatStaleUs)){safe(output,StopReason::Heartbeat,SafetyRequest::Fault);return output;}
   const bool manualMode=mode_==ControlMode::Manual;
-  const bool needsManual=mode_!=ControlMode::AutoWaypoint;
+  const bool waypointMode=mode_==ControlMode::AutoWaypoint||mode_==ControlMode::WaypointOnly;
+  const bool attitudeControl=mode_==ControlMode::AttitudeAssist||mode_==ControlMode::HeadingHold||mode_==ControlMode::AutoWaypoint;
+  const bool needsManual=!waypointMode;
   if(needsManual&&!fresh(true,manualReceivedUs_,input.nowUs,config_.manualStaleUs)){safe(output,StopReason::ManualTimeout,SafetyRequest::Disarm);return output;}
   if(!manualMode&&!fresh(input.imuValid,input.imuUs,input.nowUs,config_.imuStaleUs)){safe(output,input.imuValid?StopReason::ImuStale:StopReason::ImuInvalid,SafetyRequest::Fault);return output;}
-  if(mode_==ControlMode::AutoWaypoint&&(!fresh(input.gnssValid,input.gnssUs,input.nowUs,config_.gnssStaleUs)||!waypointCount_)){safe(output,input.gnssValid?StopReason::GnssStale:StopReason::GnssInvalid,SafetyRequest::Fault);return output;}
+  if(waypointMode&&(!fresh(input.gnssValid,input.gnssUs,input.nowUs,config_.gnssStaleUs)||!waypointCount_)){safe(output,input.gnssValid?StopReason::GnssStale:StopReason::GnssInvalid,SafetyRequest::Fault);return output;}
   // Manual commissioning deliberately has no IMU dependency. A boat may be
   // tilted on the bench; that must not disable a selected servo-only channel.
   if(!manualMode&&input.imuValid&&(std::fabs(input.pitchRad)>=config_.attitudeStopRad||std::fabs(input.rollRad)>=config_.attitudeStopRad)){safe(output,StopReason::AttitudeDanger,SafetyRequest::Fault);return output;}
@@ -104,17 +106,23 @@ Output Controller::step(const SensorInput& input){
     output.propulsionPrelimit=(manual_.enabledMask&ManualPropulsion)?manual_.propulsion:0;
   }else{
     output.enabledMask=ManualAll;
-    output.uPitch=config_.kpPitch*(config_.targetPitch-input.pitchRad)-config_.kdPitch*input.pitchRateRadS;
-    output.uRoll=config_.kpRoll*(config_.targetRoll-input.rollRad)-config_.kdRoll*input.rollRateRadS;
-    const bool tofFresh=fresh(input.tofValid,input.tofUs,input.nowUs,config_.tofStaleUs);
-    if(tofFresh)output.uHeight=config_.kpHeight*(config_.targetHeightM-input.tofM);
-    else{output.uHeight=0;output.flags|=HeightDegraded;output.reason=input.tofValid?StopReason::TofStale:StopReason::TofInvalid;}
-    if(std::fabs(input.pitchRad)>=config_.pitchPriorityRad){
-      output.uPitch=clampf(output.uPitch*1.5f,-1.0f,1.0f);output.uHeight=0;output.uRoll*=.25f;output.flags|=PitchPriority;
+    if(attitudeControl){
+      output.uPitch=config_.kpPitch*(config_.targetPitch-input.pitchRad)-config_.kdPitch*input.pitchRateRadS;
+      output.uRoll=config_.kpRoll*(config_.targetRoll-input.rollRad)-config_.kdRoll*input.rollRateRadS;
+      const bool tofFresh=fresh(input.tofValid,input.tofUs,input.nowUs,config_.tofStaleUs);
+      if(tofFresh)output.uHeight=config_.kpHeight*(config_.targetHeightM-input.tofM);
+      else{output.uHeight=0;output.flags|=HeightDegraded;output.reason=input.tofValid?StopReason::TofStale:StopReason::TofInvalid;}
+      if(std::fabs(input.pitchRad)>=config_.pitchPriorityRad){
+        output.uPitch=clampf(output.uPitch*1.5f,-1.0f,1.0f);output.uHeight=0;output.uRoll*=.25f;output.flags|=PitchPriority;
+      }
+      const float common=output.uPitch+output.uHeight;
+      output.leftPrelimit=common+output.uRoll;output.rightPrelimit=common-output.uRoll;
+    }else{
+      // WaypointOnly keeps both front-wing servos actively at neutral while
+      // removing roll, pitch, and ToF-height corrections.
+      output.leftPrelimit=0;output.rightPrelimit=0;
     }
-    const float common=output.uPitch+output.uHeight;
-    output.leftPrelimit=common+output.uRoll;output.rightPrelimit=common-output.uRoll;
-    if(mode_==ControlMode::AutoWaypoint){
+    if(waypointMode){
       output.targetYaw=waypointCourse(input,output);
       if(output.waypointDistanceM<=config_.waypointReachM){
         output.waypointReached=true;
@@ -126,7 +134,7 @@ Output Controller::step(const SensorInput& input){
       if(!headingSet_){targetYaw_=wrap(input.yawRad);headingSet_=true;}
       output.targetYaw=targetYaw_;
     }
-    if(mode_==ControlMode::HeadingHold||mode_==ControlMode::AutoWaypoint){
+    if(mode_==ControlMode::HeadingHold||waypointMode){
       output.courseErrorRad=wrap(output.targetYaw-input.yawRad);
       const float blend=speedBlend(input.groundSpeedMps);
       const float gain=1.0f+blend*(config_.highSpeedYawGain-1.0f);
@@ -134,7 +142,7 @@ Output Controller::step(const SensorInput& input){
       output.uYaw=clampf(gain*config_.kpYaw*output.courseErrorRad-config_.kdYaw*input.yawRateRadS,-yawLimit,yawLimit);
       output.rearPrelimit=output.uYaw;output.flags|=YawScheduled;
     }else output.rearPrelimit=manual_.rearYaw;
-    output.propulsionPrelimit=mode_==ControlMode::AutoWaypoint?config_.autoPropulsion:manual_.propulsion;
+    output.propulsionPrelimit=waypointMode?config_.autoPropulsion:manual_.propulsion;
   }
 
   if(!finite(output.leftPrelimit)||!finite(output.rightPrelimit)||!finite(output.rearPrelimit)||!finite(output.propulsionPrelimit)){safe(output,StopReason::NonFinite,SafetyRequest::Fault);return output;}
@@ -143,7 +151,7 @@ Output Controller::step(const SensorInput& input){
     const bool powerFresh=fresh(input.powerValid,input.powerUs,input.nowUs,config_.powerStaleUs);
     if(input.vescFault||!vescFresh||!powerFresh){
       const StopReason unavailable=input.vescFault?StopReason::VescFault:(!vescFresh?StopReason::VescStale:(input.powerValid?StopReason::PowerStale:StopReason::PowerInvalid));
-      if(mode_==ControlMode::AutoWaypoint){safe(output,unavailable,SafetyRequest::Fault);return output;}
+      if(waypointMode){safe(output,unavailable,SafetyRequest::Fault);return output;}
       output.propulsionPrelimit=0;output.flags|=PropulsionUnavailable;output.reason=unavailable;
     }
   }
@@ -172,7 +180,7 @@ Output Controller::step(const SensorInput& input){
 }
 
 const char* safetyName(AuthoritativeSafety value){switch(value){case AuthoritativeSafety::Boot:return"BOOT";case AuthoritativeSafety::Disarmed:return"DISARMED";case AuthoritativeSafety::ArmedIdle:return"ARMED_IDLE";case AuthoritativeSafety::Running:return"RUNNING";case AuthoritativeSafety::EStop:return"E_STOP";default:return"FAULT";}}
-const char* modeName(ControlMode value){switch(value){case ControlMode::Manual:return"MANUAL";case ControlMode::AttitudeAssist:return"ATTITUDE_ASSIST";case ControlMode::HeadingHold:return"HEADING_HOLD";default:return"AUTO_WAYPOINT";}}
+const char* modeName(ControlMode value){switch(value){case ControlMode::Manual:return"MANUAL";case ControlMode::AttitudeAssist:return"ATTITUDE_ASSIST";case ControlMode::HeadingHold:return"HEADING_HOLD";case ControlMode::AutoWaypoint:return"AUTO_WAYPOINT";default:return"WAYPOINT_ONLY";}}
 const char* reasonName(StopReason value){switch(value){case StopReason::None:return"NONE";case StopReason::Stop:return"STOP";case StopReason::EStop:return"E_STOP";case StopReason::Heartbeat:return"HEARTBEAT";case StopReason::ManualTimeout:return"MANUAL_TIMEOUT";case StopReason::ImuInvalid:return"IMU_INVALID";case StopReason::ImuStale:return"IMU_STALE";case StopReason::TofInvalid:return"TOF_INVALID";case StopReason::TofStale:return"TOF_STALE";case StopReason::GnssInvalid:return"GNSS_INVALID";case StopReason::GnssStale:return"GNSS_STALE";case StopReason::VescFault:return"VESC_FAULT";case StopReason::NonFinite:return"NONFINITE";case StopReason::FinalWaypoint:return"FINAL_WAYPOINT";case StopReason::PowerInvalid:return"POWER_INVALID";case StopReason::PowerStale:return"POWER_STALE";case StopReason::LowVoltage:return"LOW_VOLTAGE";case StopReason::OverCurrent:return"OVER_CURRENT";case StopReason::MotorStall:return"MOTOR_STALL";case StopReason::AttitudeDanger:return"ATTITUDE_DANGER";case StopReason::VescStale:return"VESC_STALE";default:return"CAVITATION";}}
 
 }  // namespace production_control

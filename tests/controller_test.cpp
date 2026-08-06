@@ -4,6 +4,7 @@
 
 #include "../control/lib/production_control/src/competition_actuators.h"
 #include "../control/lib/production_control/src/production_control.h"
+#include "../communication/include/fixed_waypoints.h"
 
 using namespace production_control;
 
@@ -35,6 +36,87 @@ void testAutoWaypoint() {
   assert(output.physicalGate);
   assert(output.propulsion>0);
   assert(output.waypointDistanceM>19.9f);
+}
+
+void testIndependentWaypointAndAttitudeModes() {
+  Waypoint route[]={{20.0f,5.0f}};
+  auto input=nominal();
+  input.pitchRad=.10f;
+  input.rollRad=-.08f;
+  input.yawRad=.20f;
+
+  Controller waypointOnly;
+  assert(waypointOnly.setWaypoints(route,1,1,AuthoritativeSafety::Disarmed).ack==Ack::Accepted);
+  assert(waypointOnly.setMode(ControlMode::WaypointOnly,2,AuthoritativeSafety::Disarmed).ack==Ack::Accepted);
+  const auto navigation=waypointOnly.step(input);
+  assert(navigation.safetyRequest==SafetyRequest::None);
+  assert(navigation.physicalGate);
+  assert(navigation.enabledMask==ManualAll);
+  assert(navigation.leftFront==0&&navigation.rightFront==0);
+  assert(navigation.rearYaw!=0);
+  assert(navigation.propulsion>0);
+  assert(navigation.uPitch==0&&navigation.uRoll==0&&navigation.uHeight==0);
+  assert(!(navigation.flags&HeightDegraded));
+
+  auto noTof=input;noTof.tofValid=false;
+  const auto navigationWithoutTof=waypointOnly.step(noTof);
+  assert(navigationWithoutTof.safetyRequest==SafetyRequest::None);
+  assert(!(navigationWithoutTof.flags&HeightDegraded));
+
+  Controller combined;
+  assert(combined.setWaypoints(route,1,1,AuthoritativeSafety::Disarmed).ack==Ack::Accepted);
+  assert(combined.setMode(ControlMode::AutoWaypoint,2,AuthoritativeSafety::Disarmed).ack==Ack::Accepted);
+  const auto fullAuto=combined.step(input);
+  assert(fullAuto.safetyRequest==SafetyRequest::None);
+  assert(fullAuto.physicalGate);
+  assert(fullAuto.leftFront!=0||fullAuto.rightFront!=0);
+  assert(fullAuto.rearYaw!=0);
+  assert(fullAuto.propulsion>0);
+
+  Controller attitudeOnly;
+  assert(attitudeOnly.setMode(ControlMode::AttitudeAssist,1,AuthoritativeSafety::Disarmed).ack==Ack::Accepted);
+  attitudeOnly.setManual({.7f,-.7f,.3f,.4f,ManualAll},input.nowUs);
+  const auto assisted=attitudeOnly.step(input);
+  assert(assisted.safetyRequest==SafetyRequest::None);
+  assert(assisted.leftFront!=0||assisted.rightFront!=0);
+  assert(assisted.rearYaw>0);
+  assert(assisted.propulsion>0);
+
+  input.gnssValid=false;
+  const auto noFix=waypointOnly.step(input);
+  assert(noFix.safetyRequest==SafetyRequest::Fault);
+  assert(noFix.reason==StopReason::GnssInvalid);
+
+  input=nominal(1'100'000);input.rollRad=.8f;
+  const auto unsafeAttitude=waypointOnly.step(input);
+  assert(unsafeAttitude.safetyRequest==SafetyRequest::Fault);
+  assert(unsafeAttitude.reason==StopReason::AttitudeDanger);
+}
+
+void testFinalWaypointStops() {
+  Controller controller;
+  Waypoint route[]={{0.5f,0.0f}};
+  controller.setWaypointReachRadius(1.5f,AuthoritativeSafety::Disarmed);
+  controller.setWaypoints(route,1,1,AuthoritativeSafety::Disarmed);
+  controller.setMode(ControlMode::WaypointOnly,2,AuthoritativeSafety::Disarmed);
+  const auto output=controller.step(nominal());
+  assert(output.waypointReached);
+  assert(output.reason==StopReason::FinalWaypoint);
+  assert(output.safetyRequest==SafetyRequest::Disarm);
+  assert(!output.physicalGate);
+  assert(output.leftFront==0&&output.rightFront==0&&output.rearYaw==0&&output.propulsion==0);
+}
+
+void testFixedWaypointCatalog() {
+  using namespace fixed_waypoints;
+  static_assert(kCount==8,"fixed waypoint count");
+  assert(kPoints[0].name=='A');
+  assert(std::fabs(kPoints[0].latitudeDeg-35.45327)<1e-9);
+  assert(std::fabs(kPoints[0].longitudeDeg-136.07198)<1e-9);
+  assert(kPoints[7].name=='H');
+  assert(std::fabs(kPoints[7].latitudeDeg-35.44196)<1e-9);
+  assert(std::fabs(kPoints[7].longitudeDeg-136.09429)<1e-9);
+  assert(byIndex(8)==nullptr);
 }
 
 void testTofGracefulDegradation() {
@@ -171,6 +253,9 @@ void testFullManualWithPropulsion() {
 
 int main() {
   testAutoWaypoint();
+  testIndependentWaypointAndAttitudeModes();
+  testFinalWaypointStops();
+  testFixedWaypointCatalog();
   testTofGracefulDegradation();
   testPowerProtection();
   testStallAndPitchProtection();
