@@ -155,6 +155,20 @@ void testServoOnlyManualIgnoresUnrelatedSensorTrips() {
   assert(assistedOutput.reason==StopReason::AttitudeDanger);
 }
 
+void testFullManualWithPropulsion() {
+  Controller controller;
+  controller.setManual({.5f,-.4f,.3f,.6f,ManualAll},1'000'000);
+  const auto output=controller.step(nominal());
+  assert(output.safetyRequest==SafetyRequest::None);
+  assert(output.physicalGate);
+  assert(output.enabledMask==ManualAll);
+  assert(output.leftFront>0);
+  assert(output.rightFront<0);
+  assert(output.rearYaw>0);
+  assert(output.propulsion>0);
+  assert(!(output.flags&PropulsionUnavailable));
+}
+
 int main() {
   testAutoWaypoint();
   testTofGracefulDegradation();
@@ -163,5 +177,6 @@ int main() {
   testActuatorMapping();
   testPartialManualWithoutSensors();
   testServoOnlyManualIgnoresUnrelatedSensorTrips();
+  testFullManualWithPropulsion();
   std::cout << "controller tests passed\n";
 }
