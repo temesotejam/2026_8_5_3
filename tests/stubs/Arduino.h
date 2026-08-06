@@ -7,8 +7,11 @@
 #define SERIAL_8N1 0
 #define portMUX_INITIALIZER_UNLOCKED 0
 
+constexpr int D0=0,D1=1,D2=2,D3=3,D4=4,D5=5,D6=6,D7=7,D8=8,D9=9,D10=10;
+
 using TaskHandle_t=void*;
 using portMUX_TYPE=int;
+using UBaseType_t=unsigned int;
 
 class String {
  public:

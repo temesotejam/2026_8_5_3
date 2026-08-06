@@ -63,6 +63,7 @@ struct Config {
   float autoPropulsion=.55f,slewPerStep=.04f,waypointReachM=1.5f;
   float losLookaheadM=4.0f,minCourseSpeedMps=.5f;
   float pitchPriorityRad=.35f,attitudeStopRad=.61f;
+  bool enableAttitudeDangerTrip=false;
   float lowSpeedMps=.5f,highSpeedMps=3.0f;
   float highSpeedYawGain=.45f,highSpeedYawLimit=.35f;
   float lowVoltageV=9.5f,criticalVoltageV=8.5f;

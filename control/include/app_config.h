@@ -5,7 +5,7 @@
 namespace app_config {
 
 constexpr char kFirmwareName[]="xiao-boat-control-integration";
-constexpr char kFirmwareVersion[]="1.2.1-gnss-mode-gate";
+constexpr char kFirmwareVersion[]="1.2.2-no-attitude-trip";
 constexpr int kPeripheralSdaPin=D1,kPeripheralSclPin=D0;
 constexpr int kBnoRstPin=D2,kBnoIntPin=D3,kBnoSdaPin=D4,kBnoSclPin=D5;
 constexpr int kLinkRxPin=D6,kLinkTxPin=D7,kVescRxPin=D8,kVescTxPin=D9,kMotorRelayPin=D10;
@@ -31,6 +31,10 @@ constexpr float kCompetitionServoMinUs=1200.0f,kCompetitionServoNeutralUs=1500.0
 constexpr bool kCompetitionLeftReversed=false,kCompetitionRightReversed=false,kCompetitionRearReversed=false;
 constexpr float kCompetitionKpPitch=0.80f,kCompetitionKdPitch=0.10f,kCompetitionKpRoll=1.25f,kCompetitionKdRoll=0.22f,kCompetitionKpHeight=0.75f,kCompetitionKpYaw=0.90f,kCompetitionKdYaw=0.12f;
 constexpr float kCompetitionTargetHeightM=0.45f,kCompetitionAutoPropulsion=0.55f,kCompetitionWaypointReachM=1.5f,kCompetitionLosLookaheadM=4.0f;
+// Current operation is continuously supervised by a person. Set true only
+// when an unattended operating procedure defines and validates a safe angle.
+constexpr bool kEnableAttitudeDangerTrip=false;
+constexpr float kAttitudeDangerTripRad=0.61f;
 constexpr bool kPrimaryBnoEnabled=true,kSecondaryBnoEnabled=false;
 constexpr uint32_t kBnoAttitudeStaleUs=100000UL,kBnoGyroStaleUs=50000UL;
 constexpr uint32_t kGnssStateStaleUs=500000UL,kTofStateStaleUs=250000UL;
