@@ -84,7 +84,7 @@ function render(state){
   const running=state.operation==='running';
   get('detail').textContent=running
     ? 'CH'+state.selected_channel+' 出力中 / PWM '+state.actuators.left_us+'・'+state.actuators.right_us+'・'+state.actuators.rear_us+' µs'
-    : '全出力OFF / PCA '+(state.actuators.pca_ready?'OK':'未接続')+' / ToF '+state.sensors.tof_m.toFixed(3)+' m';
+    : '全出力OFF / 停止理由 '+state.control.stop_reason_name+' / PCAエラー '+state.actuators.pwm_errors;
   get('start').disabled=posting||!state.connected||!state.actuators.pca_ready||(!['idle','error'].includes(state.operation));
   get('channel').disabled=running||posting;
   get('stop').disabled=posting;

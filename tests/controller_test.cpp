@@ -133,6 +133,28 @@ void testPartialManualWithoutSensors() {
   assert(output.reason==StopReason::VescStale);
 }
 
+void testServoOnlyManualIgnoresUnrelatedSensorTrips() {
+  Controller controller;
+  controller.setManual({.5f,0,0,0,ManualLeft},1'000'000);
+  auto input=nominal();
+  input.pitchRad=1.0f;
+  input.rollRad=-1.0f;
+  input.vescFault=true;
+  const auto output=controller.step(input);
+  assert(output.safetyRequest==SafetyRequest::None);
+  assert(output.physicalGate);
+  assert(output.enabledMask==ManualLeft);
+  assert(output.leftFront>0);
+  assert(output.rightFront==0&&output.rearYaw==0&&output.propulsion==0);
+
+  Controller assisted;
+  assisted.setMode(ControlMode::AttitudeAssist,1,AuthoritativeSafety::Disarmed);
+  assisted.setManual({0,0,0,0,ManualLeft},input.nowUs);
+  const auto assistedOutput=assisted.step(input);
+  assert(assistedOutput.safetyRequest==SafetyRequest::Fault);
+  assert(assistedOutput.reason==StopReason::AttitudeDanger);
+}
+
 int main() {
   testAutoWaypoint();
   testTofGracefulDegradation();
@@ -140,5 +162,6 @@ int main() {
   testStallAndPitchProtection();
   testActuatorMapping();
   testPartialManualWithoutSensors();
+  testServoOnlyManualIgnoresUnrelatedSensorTrips();
   std::cout << "controller tests passed\n";
 }
