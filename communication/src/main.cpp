@@ -1,122 +1,737 @@
 #include <Arduino.h>
 #include <M5Unified.h>
-#include <SPI.h>
-#include <SD.h>
-#include <WiFi.h>
-#include <WebServer.h>
-#include <esp_timer.h>
-#include <esp_system.h>
 #include <Preferences.h>
+#include <WebServer.h>
+#include <WiFi.h>
+#include <esp_system.h>
+#include <esp_timer.h>
+
 #include <math.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "app_config.h"
-#include "gnss_receiver.h"
 #include "production_page_ja.h"
 #include <boat_protocol.h>
-#include <bin_record_serializer.h>
-#include <competition_command.h>
 
 using namespace app_config;
+
 namespace {
 
-HardwareSerial controlUart(1), gnssUart(2);
-gnss::Receiver gnssRx;
-boat::Decoder controlDecoder;
+constexpr uint32_t kLinkFreshMs = 1000;
+constexpr uint32_t kHeartbeatPeriodMs = 100;
+constexpr uint32_t kManualRefreshMs = 200;
+constexpr uint32_t kCommandRetryMs = 100;
+constexpr uint32_t kCommandTimeoutMs = 1200;
+constexpr uint32_t kSafetyRetryMs = 150;
+constexpr uint32_t kSafetyTimeoutMs = 2000;
+constexpr uint32_t kScreenPeriodMs = 200;
+constexpr size_t kRxChunkBytes = 512;
+
+enum class Stage : uint8_t {
+  Idle,
+  EnsureDisarmed,
+  WaitModeAck,
+  WaitManualAck,
+  WaitArmed,
+  WaitRunning,
+  Running,
+  Stopping,
+  Emergency,
+  ClearingEmergency,
+  Error,
+};
+
+struct LinkCache {
+  boat::ControlSnapshotPayload snapshot{};
+  boat::ControlOutputPayload output{};
+  boat::ActuatorStatePayload actuators{};
+  boat::SystemHealthPayload health{};
+  boat::ControlCommandAckPayload commandAck{};
+  uint64_t lastFrameUs = 0;
+  uint64_t lastSnapshotUs = 0;
+  uint64_t lastOutputUs = 0;
+  uint64_t lastActuatorUs = 0;
+  uint64_t lastAckUs = 0;
+  uint32_t frames = 0;
+  bool hasSnapshot = false;
+  bool hasOutput = false;
+  bool hasActuators = false;
+  bool hasHealth = false;
+  bool hasCommandAck = false;
+};
+
+struct PendingCommand {
+  boat::Type type = boat::Type::ControlModeCommand;
+  uint8_t payload[sizeof(boat::ManualCommandPayload)]{};
+  uint16_t length = 0;
+  uint32_t requestId = 0;
+  uint32_t commandSequence = 0;
+  uint32_t startedMs = 0;
+  uint32_t lastSendMs = 0;
+  uint8_t attempts = 0;
+  bool active = false;
+};
+
+HardwareSerial controlUart(1);
 WebServer web(kHttpPort);
-File logFile;
-boat::Frame queue[kFrameQueueDepth];
-portMUX_TYPE queueMux=portMUX_INITIALIZER_UNLOCKED, cacheMux=portMUX_INITIALIZER_UNLOCKED;
-TaskHandle_t logTaskHandle=nullptr,controlRxTaskHandle=nullptr; SemaphoreHandle_t sdMutex=nullptr,commandMutex=nullptr;
-uint16_t qHead=0,qTail=0,qUsed=0,qHigh=0;
-uint8_t sdBuffer[kSdWriteBufferBytes]; size_t sdUsed=0;
-bool sdReady=false,bnoCaptureActive=false,bnoLogEnqueue=true; volatile bool logging=false,logFinalizeRequested=false,logFinalizing=false; uint64_t logStartUs=0,logStopDeadlineUs=0; bool trialTargetActive=false,stopAckPending=false,stopAckReceived=false; uint32_t trialExpectedFirstSequence=0,trialExpectedLastSequence=0,trialStartAckSequence=0,trialStopAckSequence=0; uint64_t stopAckDeadlineUs=0;
-uint32_t bootId=0,localSeq=0,controlSeq=0,navSeq=0,fixSeq=0; competition_command::Manager competitionCommands{}; uint32_t commandRequestNext=0,commandSequenceNext=0; uint64_t manualInputUs=0; bool manualInputStale=false;
-constexpr uint16_t kControlRxByteBudget=2048,kControlRxFrameBudget=32,kControlRxChunkBytes=512; constexpr uint32_t kControlRxTimeBudgetUs=2000;
-uint32_t records=0,queueDrops=0,sdErrors=0,controlFrames=0,crcErrors=0,cobsErrors=0,lengthErrors=0,navTx=0;
-  enum class LoggerState:uint8_t{Idle=0,Running=1,StopRequested=2,ClosingInput=3,Draining=4,Finalizing=5,Finalized=6,Error=7}; volatile LoggerState loggerState=LoggerState::Idle;
-  const char* loggerStateName(LoggerState s){switch(s){case LoggerState::Idle:return "IDLE";case LoggerState::Running:return "RUNNING";case LoggerState::StopRequested:return "STOP_REQUESTED";case LoggerState::ClosingInput:return "CLOSING_INPUT";case LoggerState::Draining:return "DRAINING";case LoggerState::Finalizing:return "FINALIZING";case LoggerState::Finalized:return "FINALIZED";case LoggerState::Error:return "ERROR";}return "UNKNOWN";}
-  uint64_t enqueueAttempts=0,enqueueAccepted=0,enqueueRejectedInactive=0,enqueueRejectedClosing=0,queueDequeued=0,writtenToBin=0,writerExitCount=0,enqueueAfterWriterExit=0,enqueueAfterFileClose=0; uint32_t enqueueTaskCounts[4]{},enqueueAcceptedType[256]{},queueDequeuedType[256]{},writtenType[256]{},enqueueAcceptedKind[6]{},queueDequeuedKind[6]{},writtenKind[6]{},lastEnqueueSequenceType[256]{},lastWrittenSequenceType[256]{}; uint64_t lastEnqueueTypeUs[256]{},lastWrittenTypeUs[256]{}; uint64_t lastWriterExitUs=0,lastFileCloseUs=0,lastFinalizeUs=0,lastEnqueueUs=0,lastWriteUs=0; bool loggerFileClosed=false;
-  uint32_t maxQueueWaitUs=0,maxDequeueUs=0,maxEncodeUs=0,maxWriteChunkUs=0,maxPartialWriteUs=0,maxFlushUs=0,maxCloseUs=0,maxMutexWaitUs=0,partialWriteCount=0,zeroWriteCount=0;
-  uint32_t controlRxSequenceAtStopAck=0,activeEnqueueCount=0; uint64_t enqueueAttemptAfterWriterExit=0,enqueueAttemptAfterFileClose=0; bool enqueueGateClosed=false;
-  uint64_t controlRxBytes=0; uint32_t lastControlSequence=0,controlSequenceGaps=0,controlSequenceDuplicates=0,controlSequenceOutOfOrder=0,controlSequenceWraps=0,lastControlBootId=0,lastLinkDiagMs=0; uint8_t lastControlType=0; uint32_t trialFirstSequence=0,trialLastSequence=0; bool trialHasSequence=false;
-uint32_t controlRxMaxServiceUs=0,controlRxBudgetHits=0,controlRxByteBudgetHits=0,controlRxFrameBudgetHits=0,controlRxTimeBudgetHits=0,controlRxBufferMax=0; uint32_t controlEncodedFrameBytes=0; uint32_t controlRxContextElapsedUs=0,controlRxContextBuffered=0,controlLastDecoderUs=0;
-uint64_t controlServiceCalls=0,controlServiceBytesTotal=0,controlServiceFramesTotal=0; uint32_t controlServiceBytesMax=0,controlServiceFramesMax=0,controlRxBufferFullObservations=0; uint64_t controlReadCalls=0,controlZeroReadCalls=0,controlCobsDelimiters=0; uint32_t controlReadBytesMax=0,controlRxTaskMaxUs=0,controlRxTaskMaxContinuousUs=0,controlRxTaskStackHwmMin=UINT32_MAX,sdTaskMaxProcessUs=0;
-  uint32_t bnoValidFrames=0,bnoInvalidKindFrames=0,unknownTypeFrames=0;
-  uint32_t bnoKindFrames[6]{}; uint64_t lastDiagRxBytes=0,lastDiagServiceBytes=0,lastDiagServiceFrames=0; uint32_t lastDiagFrames=0,lastDiagBnoKindFrames[6]{};
-  struct RxTrialBaseline{uint64_t rxBytes=0,serviceBytes=0,frames=0,bnoValid=0,sequenceGaps=0,crc=0,cobs=0,length=0,unknown=0,bnoInvalid=0,rxFull=0,serviceCalls=0,readCalls=0,zeroReads=0,delimiters=0; uint64_t bnoKind[6]{},typeBytes[256]{}; uint32_t typeCount[256]{}; uint32_t gapHistoryTotal=0; bool valid=false;} rxTrial; struct SequenceGapEvent{uint32_t ordinal=0,previousSequence=0,nextSequence=0,missingFirst=0,missingLast=0,missingCount=0;uint8_t previousType=0,nextType=0;uint16_t rxBuffered=0;uint32_t decoderUs=0,rxTaskUs=0;uint64_t eventUs=0,elapsedUs=0;}; constexpr uint16_t kSequenceGapHistoryDepth=64; SequenceGapEvent sequenceGapHistory[kSequenceGapHistoryDepth]{}; uint16_t sequenceGapHistoryHead=0,sequenceGapHistoryCount=0; uint32_t sequenceGapHistoryTotal=0; portMUX_TYPE sequenceGapMux=portMUX_INITIALIZER_UNLOCKED;
-  struct CoreBnoArrivalStats{uint32_t count=0;uint64_t firstUs=0,lastUs=0,deltaSum=0;uint32_t deltaMin=UINT32_MAX,deltaMax=0;}; CoreBnoArrivalStats coreBnoArrival[6]{};
-uint32_t mainLoopMaxPeriodUs=0,mainLoopMaxExecutionUs=0,minFreeHeap=UINT32_MAX; uint64_t lastLoopStartUs=0;
-uint64_t lastControlUs=0,lastFixUs=0;
-uint32_t lastNavMs=0,lastHeartbeatMs=0,lastGnssStatusMs=0,lastDrawMs=0,lastTimeSyncMs=0,timeSyncSeq=0;
-uint32_t waypointRevisionNext=0;
-bool pendingNewFix=false;
-char runName[16]="none",fault[40]="none";
-uint64_t nowUs(){return static_cast<uint64_t>(esp_timer_get_time());}
-uint32_t ageMs(uint64_t then,uint64_t now){return !then?UINT32_MAX:static_cast<uint32_t>((now-then)/1000ULL);}
+boat::Decoder controlDecoder;
+TaskHandle_t rxTaskHandle = nullptr;
+portMUX_TYPE cacheMux = portMUX_INITIALIZER_UNLOCKED;
+LinkCache linkCache{};
 
-bool enqueue(boat::Frame frame);
-void emitLocal(boat::Type type,const void* payload,uint16_t length);
-void closeEnqueueGate(LoggerState next);
-boat::GnssNavV2Payload makeNav();
+uint32_t bootId = 0;
+uint32_t frameSequence = 0;
+uint32_t requestIdNext = 1;
+uint32_t commandSequenceNext = 1;
+uint32_t safetyCommandId = 0;
+uint32_t lastHeartbeatMs = 0;
+uint32_t lastManualMs = 0;
+uint32_t lastSafetyMs = 0;
+uint32_t lastScreenMs = 0;
+uint32_t crcErrors = 0;
+uint32_t cobsErrors = 0;
+uint32_t lengthErrors = 0;
 
-// Functional boundaries. These implementation fragments stay in this translation
-// unit so the first refactor does not alter task ownership, timing, or shared state.
-#include "modules/control_uart.inc"
-#include "modules/sd_logger.inc"
-#include "modules/gnss_service.inc"
+Stage stage = Stage::Idle;
+PendingCommand pending{};
+uint32_t stageStartedMs = 0;
+uint8_t selectedChannel = 0;
+float selectedValue = 0.0f;
+char operationMessage[96] = "停止中です。";
 
-void text(int x,int y,const char* s,uint16_t fg=0xFFFF,uint16_t bg=0x0000){M5.Display.setTextColor(fg,bg);M5.Display.setCursor(x,y);M5.Display.print(s);}
-void handleTouch(){auto t=M5.Touch.getDetail();if(!t.wasClicked()||t.y<198)return;if(t.x<160){if(logging)stopLog();else startLog();}else{boat::CommandPayload c{++controlSeq,(uint8_t)boat::Type::Estop,{0,0,0}};sendControl(boat::Type::Estop,&c,sizeof(c));emitLocal(boat::Type::Estop,&c,sizeof(c));}}
-void apiLink(){String b;b.reserve(4096);b="{\"uart\":{\"baud\":"+String(kControlUartBaud)+",\"rx_pin\":"+String(kControlUartRxPin)+",\"tx_pin\":"+String(kControlUartTxPin)+",\"rx_bytes\":"+String((unsigned long long)controlRxBytes)+",\"frames\":"+String(controlFrames)+",\"sequence_gaps\":"+String(controlSequenceGaps)+",\"crc_errors\":"+String(crcErrors)+",\"cobs_errors\":"+String(cobsErrors)+",\"length_errors\":"+String(lengthErrors)+"},\"types\":[";bool first=true;for(uint16_t i=0;i<256;++i){const auto& s=rxTypeStats[i];if(!s.count)continue;if(!first)b+=',';first=false;const uint16_t expected=expectedPayloadLength((uint8_t)i);char x[320];snprintf(x,sizeof(x),"{\"type\":%u,\"name\":\"%s\",\"count\":%lu,\"last_sequence\":%lu,\"last_age_ms\":%lu,\"payload_length\":%u,\"expected_length\":%u,\"length_match\":%s}",i,typeName((uint8_t)i),(unsigned long)s.count,(unsigned long)s.lastSequence,(unsigned long)ageMs(s.lastUs,nowUs()),s.lastLength,expected,expected?(s.lengthMatch?"true":"false"):"null");b+=x;}char sync[320];snprintf(sync,sizeof(sync),"],\"time_sync\":{\"requests\":%lu,\"reply_received\":%lu,\"timeouts\":%lu,\"unexpected_replies\":%lu,\"pending\":%s}}",(unsigned long)timeSyncDiag.requests,(unsigned long)timeSyncDiag.replies,(unsigned long)timeSyncDiag.timeouts,(unsigned long)timeSyncDiag.unexpectedReplies,timeSyncDiag.pending?"true":"false");b+=sync;web.send(200,"application/json",b);}
-bool parseApiFloat(const char* name,float& value){const String text=web.arg(name);if(!text.length())return false;char* end=nullptr;value=strtof(text.c_str(),&end);return end&&*end==0&&isfinite(value);}
-bool parseApiUint(const char* name,uint32_t& value){const String text=web.arg(name);if(!text.length())return false;char* end=nullptr;const unsigned long parsed=strtoul(text.c_str(),&end,10);if(!end||*end!=0||parsed>UINT32_MAX)return false;value=(uint32_t)parsed;return true;}
-void sendCompetitionPending(uint8_t type,uint32_t id,uint32_t sequence){char out[180];snprintf(out,sizeof(out),"{\"accepted\":true,\"status\":\"pending\",\"request_id\":%lu,\"command_sequence\":%lu,\"command_type\":%u}",(unsigned long)id,(unsigned long)sequence,(unsigned)type);web.send(202,"application/json",out);}
-bool sendCompetitionSafety(boat::Type type){boat::CommandPayload c{++controlSeq,(uint8_t)type,{0,0,0}};const bool ok=sendControl(type,&c,sizeof(c));if(ok)emitLocal(type,&c,sizeof(c));return ok;}
-void apiCompetitionSafety(){const String action=web.arg("action");boat::Type type=boat::Type::Stop;if(action=="arm")type=boat::Type::Arm;else if(action=="start")type=boat::Type::StartTest;else if(action=="disarm")type=boat::Type::Disarm;else if(action=="stop")type=boat::Type::Stop;else if(action=="estop")type=boat::Type::Estop;else if(action=="clear_estop")type=boat::Type::ClearEstop;else{web.send(400,"application/json","{\"accepted\":false,\"error\":\"invalid_action\"}");return;}const bool ok=sendCompetitionSafety(type);web.send(ok?202:503,"application/json",ok?"{\"accepted\":true,\"pending\":true}":"{\"accepted\":false,\"error\":\"uart_write_failed\"}");}void apiCompetitionMode(){uint32_t mode=0;if(!parseApiUint("mode",mode)||mode>3){web.send(400,"application/json","{\"accepted\":false,\"error\":\"invalid_mode\"}");return;}uint32_t id=0,seq=0;if(!queueCompetitionMode((uint8_t)mode,id,seq)){web.send(503,"application/json","{\"accepted\":false,\"error\":\"queue_full\"}");return;}sendCompetitionPending((uint8_t)boat::Type::ControlModeCommand,id,seq);}
-void apiCompetitionManual(){float left=0,right=0,rear=0,propulsion=0;uint32_t enabledMask=0;if(!parseApiFloat("left_front_wing",left)||!parseApiFloat("right_front_wing",right)||!parseApiFloat("rear_yaw",rear)||!parseApiFloat("propulsion",propulsion)||!parseApiUint("enabled_mask",enabledMask)||left<-1||left>1||right<-1||right>1||rear<-1||rear>1||propulsion<0||propulsion>1||enabledMask>boat::ManualAll){web.send(400,"application/json","{\"accepted\":false,\"error\":\"invalid_manual\"}");return;}uint32_t id=0,seq=0;if(!queueCompetitionManual(left,right,rear,propulsion,(uint8_t)enabledMask,id,seq)){web.send(409,"application/json","{\"accepted\":false,\"error\":\"manual_transaction_pending_or_queue_full\"}");return;}sendCompetitionPending((uint8_t)boat::Type::ManualCommand,id,seq);}
-void apiCompetitionHeading(){float target=0;if(!parseApiFloat("target_yaw_rad",target)){web.send(400,"application/json","{\"accepted\":false,\"error\":\"invalid_heading\"}");return;}uint32_t id=0,seq=0;if(!queueCompetitionHeading(target,id,seq)){web.send(503,"application/json","{\"accepted\":false,\"error\":\"queue_full\"}");return;}sendCompetitionPending((uint8_t)boat::Type::HeadingTarget,id,seq);}
-void apiCompetitionStatus(){competition_command::Diagnostics d{};competition_command::PendingCommand entries[competition_command::Manager::kSlots]{};if(commandMutex)xSemaphoreTake(commandMutex,portMAX_DELAY);d=competitionCommands.diagnostics();memcpy(entries,competitionCommands.entries(),sizeof(entries));if(commandMutex)xSemaphoreGive(commandMutex);String body="{\"manual_input_stale\":"+String(manualInputStale?"true":"false")+",\"manual_input_age_ms\":"+String(ageMs(manualInputUs,nowUs()))+",\"diagnostics\":{\"requests\":"+String(d.requests)+",\"validation_rejects\":"+String(d.validationRejects)+",\"queued\":"+String(d.queued)+",\"initial_transmissions\":"+String(d.initialTx)+",\"retry_transmissions\":"+String(d.retryTx)+",\"ack_received\":"+String(d.ackReceived)+",\"ack_matched\":"+String(d.ackMatched)+",\"ack_unmatched\":"+String(d.ackUnmatched)+",\"ack_malformed\":"+String(d.ackMalformed)+",\"ack_duplicate\":"+String(d.ackDuplicate)+",\"ack_late\":"+String(d.ackLate)+",\"ack_applied\":"+String(d.ackApplied)+",\"ack_rejected\":"+String(d.ackRejected)+",\"protocol_conflict\":"+String(d.protocolConflict)+",\"stale\":"+String(d.stale)+",\"timed_out\":"+String(d.timeouts)+",\"queue_overflow\":"+String(d.queueOverflow)+",\"manual_samples\":"+String(d.manualSamples)+",\"manual_retries\":"+String(d.manualRetries)+",\"physical_writes\":"+String(d.physicalWrites)+"},\"transactions\":[";bool first=true;for(uint8_t i=0;i<competition_command::Manager::kSlots;++i){const auto&e=entries[i];if(!e.valid)continue;if(!first)body+=',';first=false;char row[360];snprintf(row,sizeof(row),"{\"slot\":%u,\"state\":\"%s\",\"type\":%u,\"request_id\":%lu,\"command_sequence\":%lu,\"source_us\":%llu,\"transmissions\":%u,\"ack_disposition\":%u,\"ack_reason\":%u,\"xiao_applied_us\":%llu}",(unsigned)i,competition_command::stateName(e.state),(unsigned)e.type,(unsigned long)e.requestId,(unsigned long)e.commandSequence,(unsigned long long)e.sourceUs,(unsigned)e.transmissions,(unsigned)e.ackDisposition,(unsigned)e.ackReason,(unsigned long long)e.xiaoAppliedUs);body+=row;}body+="]}";web.send(200,"application/json",body);}
-void printCompetitionCommandDiag(){competition_command::Diagnostics d{};if(commandMutex)xSemaphoreTake(commandMutex,portMAX_DELAY);d=competitionCommands.diagnostics();if(commandMutex)xSemaphoreGive(commandMutex);Serial.printf("COMPETITION_CORE requests=%lu validation=%lu queued=%lu initial=%lu retry=%lu ack_rx=%lu matched=%lu unmatched=%lu malformed=%lu duplicate=%lu late=%lu applied=%lu rejected=%lu conflict=%lu stale=%lu timeout=%lu overflow=%lu manual_stale=%lu manual_samples=%lu manual_retries=%lu physical_writes=%lu\n",(unsigned long)d.requests,(unsigned long)d.validationRejects,(unsigned long)d.queued,(unsigned long)d.initialTx,(unsigned long)d.retryTx,(unsigned long)d.ackReceived,(unsigned long)d.ackMatched,(unsigned long)d.ackUnmatched,(unsigned long)d.ackMalformed,(unsigned long)d.ackDuplicate,(unsigned long)d.ackLate,(unsigned long)d.ackApplied,(unsigned long)d.ackRejected,(unsigned long)d.protocolConflict,(unsigned long)d.stale,(unsigned long)d.timeouts,(unsigned long)d.queueOverflow,(unsigned long)d.manualInputStale,(unsigned long)d.manualSamples,(unsigned long)d.manualRetries,(unsigned long)d.physicalWrites);}
-void apiLogStart(){const String arg=web.arg("duration_s");const uint32_t durationS=arg.length()?arg.toInt():0;if(arg.length()&&(durationS<1||durationS>86400)){web.send(400,"application/json","{\"error\":\"duration_s_must_be_1_to_86400\"}");return;}const bool ok=startLog(durationS);char reply[120];snprintf(reply,sizeof(reply),"{\"logging\":%s,\"duration_s\":%lu}",ok?"true":"false",(unsigned long)durationS);web.send(ok?202:503,"application/json",reply);}
-void apiProductionStatus(){
-  ProductionCache cache{};portENTER_CRITICAL(&cacheMux);cache=production;portEXIT_CRITICAL(&cacheMux);
-  const auto& snapshot=cache.snapshot;const auto& output=cache.output;const auto& power=cache.power;const auto& motor=cache.motor;const auto& actuators=cache.actuators;const auto& health=cache.health;
-  const uint32_t controlAgeMs=ageMs(lastControlUs,nowUs());const bool controlFresh=lastControlUs&&controlAgeMs<=1000;
-  String body;body.reserve(3400);
-  char json[3200];
-  snprintf(json,sizeof(json),"{\"connected\":%s,\"ever_received\":%s,\"age_ms\":%lu,\"link\":{\"rx_bytes\":%llu,\"frames\":%lu,\"crc_errors\":%lu,\"cobs_errors\":%lu,\"length_errors\":%lu},\"logging\":%s,\"log_file\":\"%s\",\"gnss\":{\"valid\":%u,\"latitude\":%.8f,\"longitude\":%.8f,\"speed_mps\":%.3f},\"attitude\":{\"valid\":%u,\"roll_rad\":%.5f,\"pitch_rad\":%.5f,\"yaw_rad\":%.5f},\"height\":{\"valid\":%u,\"distance_m\":%.3f},\"control\":{\"safety\":%u,\"mode\":%u,\"reason\":%u,\"enabled_mask\":%u,\"waypoint\":%u,\"distance_m\":%.2f,\"left\":%.3f,\"right\":%.3f,\"rear\":%.3f,\"propulsion\":%.3f},\"power\":{\"valid\":%u,\"voltage_v\":%.2f,\"current_a\":%.2f,\"power_w\":%.1f},\"motor\":{\"valid\":%u,\"duty\":%.3f,\"erpm\":%.1f,\"fault\":%u},\"actuators\":{\"pca_ready\":%u,\"enabled\":%u,\"enabled_mask\":%u,\"motor_relay_enabled\":%u,\"left_us\":%u,\"right_us\":%u,\"rear_us\":%u,\"target_duty\":%.3f,\"applied_duty\":%.3f,\"pwm_writes\":%lu,\"pwm_errors\":%lu},\"health_flags\":%lu,\"waypoint_ack\":{\"received\":%s,\"revision\":%lu,\"status\":%u,\"reason\":%u,\"count\":%u}}",
-    controlFresh?"true":"false",lastControlUs?"true":"false",(unsigned long)controlAgeMs,(unsigned long long)controlRxBytes,(unsigned long)controlFrames,(unsigned long)crcErrors,(unsigned long)cobsErrors,(unsigned long)lengthErrors,logging?"true":"false",runName,snapshot.gnssValid,snapshot.latitudeDeg,snapshot.longitudeDeg,snapshot.speedMps,snapshot.imuValid,snapshot.rollRad,snapshot.pitchRad,snapshot.yawRad,snapshot.heightValid,snapshot.tofFilteredM,output.safety,snapshot.mode,output.stopReason,output.reservedControl,output.waypointIndex,output.waypointDistanceM,output.leftFrontWing,output.rightFrontWing,output.rearYaw,output.propulsion,power.valid,power.busVoltageV,power.currentA,power.powerW,motor.valid,motor.duty,motor.erpm,motor.fault,actuators.pcaReady,actuators.outputsEnabled,actuators.enabledMask,actuators.motorRelayEnabled,actuators.leftPulseUs,actuators.rightPulseUs,actuators.rearPulseUs,actuators.targetDuty,actuators.appliedDuty,(unsigned long)actuators.pwmWrites,(unsigned long)actuators.pwmErrors,(unsigned long)health.flags,cache.hasWaypointAck?"true":"false",(unsigned long)cache.waypointAck.revision,cache.waypointAck.status,cache.waypointAck.reason,cache.waypointAck.count);
-  body=json;web.send(200,"application/json",body);
+uint64_t nowUs() { return static_cast<uint64_t>(esp_timer_get_time()); }
+
+uint32_t ageMs(uint64_t timestampUs, uint64_t currentUs) {
+  if (!timestampUs || currentUs < timestampUs) return UINT32_MAX;
+  const uint64_t age = (currentUs - timestampUs) / 1000ULL;
+  return age > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(age);
 }
-void apiWaypoints(){
-  const String source=web.arg("points");if(!source.length()){web.send(400,"application/json","{\"accepted\":false,\"error\":\"points_required\"}");return;}
-  boat::WaypointSetPayload request{};request.requestId=nextCommandRequestId();request.action=1;
-  const String radiusText=web.arg("reach_radius_m");request.reachRadiusM=radiusText.length()?radiusText.toFloat():1.5f;
-  if(!isfinite(request.reachRadiusM)||request.reachRadiusM<.5f||request.reachRadiusM>20.0f){web.send(400,"application/json","{\"accepted\":false,\"error\":\"invalid_radius\"}");return;}
-  int start=0;while(start<source.length()&&request.count<16){int end=source.indexOf(';',start);if(end<0)end=source.length();String pair=source.substring(start,end);pair.trim();if(pair.length()){const int comma=pair.indexOf(',');if(comma<1){web.send(400,"application/json","{\"accepted\":false,\"error\":\"invalid_point\"}");return;}const String latText=pair.substring(0,comma),lonText=pair.substring(comma+1);char* latEnd=nullptr;char* lonEnd=nullptr;const double lat=strtod(latText.c_str(),&latEnd),lon=strtod(lonText.c_str(),&lonEnd);if(!latEnd||*latEnd||!lonEnd||*lonEnd||!isfinite(lat)||!isfinite(lon)||lat<-90||lat>90||lon<-180||lon>180){web.send(400,"application/json","{\"accepted\":false,\"error\":\"invalid_coordinate\"}");return;}request.points[request.count].latitudeDeg=lat;request.points[request.count].longitudeDeg=lon;++request.count;}start=end+1;}
-  if(!request.count){web.send(400,"application/json","{\"accepted\":false,\"error\":\"empty_route\"}");return;}
-  Preferences preferences;preferences.begin("boatcmd",false);waypointRevisionNext=max(waypointRevisionNext,preferences.getUInt("wp_revision",0))+1;preferences.putUInt("wp_revision",waypointRevisionNext);preferences.end();request.revision=waypointRevisionNext;request.canonicalCrc=boat::canonicalCrc(&request,offsetof(boat::WaypointSetPayload,canonicalCrc));
-  const bool ok=sendControl(boat::Type::WaypointSet,&request,sizeof(request));if(ok)emitLocal(boat::Type::WaypointSet,&request,sizeof(request));
-  char response[180];snprintf(response,sizeof(response),"{\"accepted\":%s,\"request_id\":%lu,\"revision\":%lu,\"count\":%u}",ok?"true":"false",(unsigned long)request.requestId,(unsigned long)request.revision,request.count);web.send(ok?202:503,"application/json",response);
-}
-const char productionPage[]=R"HTML(<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><style>body{font:15px system-ui;background:#0d1720;color:#eef;padding:12px;max-width:900px;margin:auto}.card{background:#182735;border-radius:10px;padding:12px;margin:10px 0}button,input,textarea{font:inherit;padding:9px;margin:4px;border-radius:6px;border:1px solid #5c7182}button{background:#f0bd3d}.danger{background:#ef5350}textarea{width:94%;height:95px}pre{white-space:pre-wrap}label{display:inline-block;min-width:130px}</style><h2>Water-surface boat control</h2><div class=card><b>Safety</b><br><button onclick="safety('arm')">ARM</button><button onclick="safety('start')">START</button><button onclick="safety('stop')">STOP</button><button onclick="safety('disarm')">DISARM</button><button class=danger onclick="safety('estop')">E-STOP</button><button onclick="safety('clear_estop')">Clear E-stop</button></div><div class=card><b>Mode</b><br><button onclick="mode(0)">Manual</button><button onclick="mode(1)">Attitude assist</button><button onclick="mode(2)">Heading hold</button><button onclick="mode(3)">Auto waypoint</button><p>Heading rad <input id=heading value=0 size=8><button onclick="post('/api/competition/heading?target_yaw_rad='+heading.value)">Set heading</button></p></div><div class=card><b>Manual command</b><br><label>Left front</label><input id=l type=range min=-1 max=1 step=.01 value=0><span id=lv>0</span><br><label>Right front</label><input id=r type=range min=-1 max=1 step=.01 value=0><span id=rv>0</span><br><label>Rear yaw</label><input id=y type=range min=-1 max=1 step=.01 value=0><span id=yv>0</span><br><label>Propulsion</label><input id=p type=range min=0 max=1 step=.01 value=0><span id=pv>0</span><br><button onclick="manual=true">Enable continuous manual</button><button onclick="manual=false;l.value=r.value=y.value=p.value=0;sendManual()">Manual zero</button></div><div class=card><b>Waypoints (latitude,longitude; one per line)</b><textarea id=points placeholder="36.000000,136.000000&#10;36.000100,136.000100"></textarea><br>Reach radius m <input id=radius value=1.5 size=6><button onclick="setRoute()">Set route while DISARMED</button></div><div class=card><b>Live status</b><pre id=status>waiting</pre></div><script>let manual=false;async function post(url){let text=await fetch(url,{method:'POST'}).then(r=>r.text());status.textContent=text;return text}function safety(x){return post('/api/competition/safety?action='+x)}function mode(x){return post('/api/competition/mode?mode='+x)}function sendManual(){let u='/api/competition/manual?left_front_wing='+l.value+'&right_front_wing='+r.value+'&rear_yaw='+y.value+'&propulsion='+p.value;lv.textContent=l.value;rv.textContent=r.value;yv.textContent=y.value;pv.textContent=p.value;return post(u)}function setRoute(){let q=encodeURIComponent(points.value.trim().split(/\n+/).join(';'));return post('/api/waypoints?reach_radius_m='+radius.value+'&points='+q)}async function update(){try{status.textContent=JSON.stringify(await fetch('/api/status',{cache:'no-store'}).then(r=>r.json()),null,2)}catch(e){status.textContent='status failed'}}setInterval(()=>{if(manual)sendManual();else update()},250);update()</script>)HTML";
-void drawProduction(){ProductionCache cache{};portENTER_CRITICAL(&cacheMux);cache=production;portEXIT_CRITICAL(&cacheMux);M5.Display.fillScreen(0);M5.Display.setTextSize(1);M5.Display.setCursor(6,6);M5.Display.printf("BOAT CONTROL  SD:%s LOG:%s\n",sdReady?"OK":"ERR",logging?runName:"STOP");M5.Display.printf("LINK:%s age:%lu ms GNSS:%s\n",lastControlUs?"OK":"WAIT",(unsigned long)ageMs(lastControlUs,nowUs()),(gnssRx.latest().flags&gnss::FixValid)?"FIX":"NOFIX");M5.Display.printf("STATE:%u MODE:%u REASON:%u\n",cache.output.safety,cache.snapshot.mode,cache.output.stopReason);M5.Display.printf("RPY %.2f %.2f %.2f rad\n",cache.snapshot.rollRad,cache.snapshot.pitchRad,cache.snapshot.yawRad);M5.Display.printf("ToF %.3f m  V %.2f I %.2f\n",cache.snapshot.tofFilteredM,cache.power.busVoltageV,cache.power.currentA);M5.Display.printf("WP %u dist %.1f m speed %.2f\n",cache.output.waypointIndex,cache.output.waypointDistanceM,cache.snapshot.speedMps);M5.Display.printf("PWM %u/%u/%u duty %.2f relay %u fault %u\n",cache.actuators.leftPulseUs,cache.actuators.rightPulseUs,cache.actuators.rearPulseUs,cache.actuators.appliedDuty,cache.actuators.motorRelayEnabled,cache.motor.fault);M5.Display.fillRoundRect(4,202,150,32,5,logging?0xF800:0x07E0);M5.Display.fillRoundRect(166,202,150,32,5,0xF800);text(26,213,logging?"LOG STOP":"LOG START",0x0000,logging?0xF800:0x07E0);text(210,213,"E-STOP",0x0000,0xF800);}
-void startWeb(){WiFi.mode(WIFI_AP);WiFi.softAP(kApSsid,kApPassword);web.on("/",HTTP_GET,[]{web.send(200,"text/html",productionPageJapanese);});web.on("/api/status",HTTP_GET,apiProductionStatus);web.on("/api/link",HTTP_GET,apiLink);web.on("/api/log/start",HTTP_POST,apiLogStart);web.on("/api/log/stop",HTTP_POST,apiLogStop);web.on("/api/log/files",HTTP_GET,apiLogFiles);web.on("/api/log/download",HTTP_GET,apiLogDownload);web.on("/api/waypoints",HTTP_POST,apiWaypoints);web.on("/api/competition/mode",HTTP_POST,apiCompetitionMode);web.on("/api/competition/manual",HTTP_POST,apiCompetitionManual);web.on("/api/competition/heading",HTTP_POST,apiCompetitionHeading);web.on("/api/competition/safety",HTTP_POST,apiCompetitionSafety);web.on("/api/competition/commands",HTTP_GET,apiCompetitionStatus);web.begin();Serial.printf("WEB SSID=%s PASS=%s URL=http://%s/\n",kApSsid,kApPassword,WiFi.softAPIP().toString().c_str());}
-}
-void setup(){auto cfg=M5.config();cfg.serial_baudrate=115200;M5.begin(cfg);M5.Display.setTextSize(1);M5.Display.setTextColor(0xFFFF,0);bootId=esp_random();if(!bootId)bootId=1;gnssUart.setRxBufferSize(kGnssUartRxBufferBytes);gnssRx.begin(gnssUart);controlUart.setRxBufferSize(16384);controlUart.setTimeout(2);controlUart.begin(kControlUartBaud,SERIAL_8N1,kControlUartRxPin,kControlUartTxPin);SPI.begin(kSdSckPin,kSdMisoPin,kSdMosiPin,kSdCsPin);traceSd(SdTraceSource::Setup,SdTraceOperation::SpiBegin);sdReady=SD.begin(kSdCsPin,SPI,10000000);traceSd(SdTraceSource::Setup,SdTraceOperation::SdBegin,sdReady);if(sdReady)traceSdMkdir(kLogDirectory,SdTraceSource::Setup);sdMutex=xSemaphoreCreateMutex();commandMutex=xSemaphoreCreateMutex();initCommandCounters();xTaskCreatePinnedToCore(logTask,"SdWriter",12288,nullptr,1,&logTaskHandle,1);xTaskCreatePinnedToCore(controlRxTask,"UartRx",8192,nullptr,2,&controlRxTaskHandle,1);startWeb();if(sdReady)startLog();Serial.printf("%s %s SD=%d GNSS RX=%d TX=%d CONTROL RX=%d TX=%d\n",kFirmwareName,kFirmwareVersion,sdReady,kGnssRxPin,kGnssTxPin,kControlUartRxPin,kControlUartTxPin);drawProduction();}
-void loop(){
-  const uint64_t loopStartUs=nowUs(); if(lastLoopStartUs){const uint32_t periodUs=(uint32_t)(loopStartUs-lastLoopStartUs);if(periodUs>mainLoopMaxPeriodUs)mainLoopMaxPeriodUs=periodUs;} lastLoopStartUs=loopStartUs;
-  M5.update(); web.handleClient(); handleTouch(); if(logging&&logStopDeadlineUs&&nowUs()>=logStopDeadlineUs)stopLog(); serviceGnss(); serviceTx(); serviceCompetitionCommands();
-  const uint32_t freeHeap=ESP.getFreeHeap(); if(freeHeap<minFreeHeap)minFreeHeap=freeHeap; const uint32_t executionUs=(uint32_t)(nowUs()-loopStartUs); if(executionUs>mainLoopMaxExecutionUs)mainLoopMaxExecutionUs=executionUs;
-  if(millis()-lastLinkDiagMs>=1000){
-    lastLinkDiagMs=millis(); const uint64_t rxBytesNow=controlRxBytes; const uint32_t framesNow=controlFrames; const uint64_t rxBytesRate=rxBytesNow>=lastDiagRxBytes?rxBytesNow-lastDiagRxBytes:rxBytesNow; const uint32_t framesRate=framesNow>=lastDiagFrames?framesNow-lastDiagFrames:framesNow; uint32_t bnoRate[6]{}; for(uint8_t i=0;i<6;++i){bnoRate[i]=bnoKindFrames[i]>=lastDiagBnoKindFrames[i]?bnoKindFrames[i]-lastDiagBnoKindFrames[i]:bnoKindFrames[i];lastDiagBnoKindFrames[i]=bnoKindFrames[i];} lastDiagRxBytes=rxBytesNow; lastDiagFrames=framesNow;
-    Serial.printf("XIAO UART baud=%lu rx=GPIO%d tx=GPIO%d bytes=%llu frames=%lu bytes_s=%llu frames_s=%lu crc/cobs/len=%lu/%lu/%lu seqgap=%lu age_ms=%lu type=%u log=%u q=%u rec=%lu final=%u\n",(unsigned long)kControlUartBaud,kControlUartRxPin,kControlUartTxPin,(unsigned long long)controlRxBytes,(unsigned long)controlFrames,(unsigned long long)rxBytesRate,(unsigned long)framesRate,(unsigned long)crcErrors,(unsigned long)cobsErrors,(unsigned long)lengthErrors,(unsigned long)controlSequenceGaps,(unsigned long)ageMs(lastControlUs,nowUs()),lastControlType,logging?1:0,qUsed,(unsigned long)records,logFinalizing?1:0);
-    Serial.printf("RXDIAG max_us=%lu budget_hits=%lu byte/frame/time=%lu/%lu/%lu rx_buf_max=%lu loop_period_max_us=%lu loop_exec_max_us=%lu free_heap=%lu min_free_heap=%lu reset_reason=%d bno_kind_1to5_s=%lu/%lu/%lu/%lu/%lu queue=%u high=%u drops=%lu\n",(unsigned long)controlRxMaxServiceUs,(unsigned long)controlRxBudgetHits,(unsigned long)controlRxByteBudgetHits,(unsigned long)controlRxFrameBudgetHits,(unsigned long)controlRxTimeBudgetHits,(unsigned long)controlRxBufferMax,(unsigned long)mainLoopMaxPeriodUs,(unsigned long)mainLoopMaxExecutionUs,(unsigned long)freeHeap,(unsigned long)minFreeHeap,(int)esp_reset_reason(),(unsigned long)bnoRate[1],(unsigned long)bnoRate[2],(unsigned long)bnoRate[3],(unsigned long)bnoRate[4],(unsigned long)bnoRate[5],qUsed,qHigh,(unsigned long)queueDrops);
-     const uint64_t serviceBytesNow=controlServiceBytesTotal,serviceFramesNow=controlServiceFramesTotal; const uint64_t serviceBytesRate=serviceBytesNow>=lastDiagServiceBytes?serviceBytesNow-lastDiagServiceBytes:serviceBytesNow,serviceFramesRate=serviceFramesNow>=lastDiagServiceFrames?serviceFramesNow-lastDiagServiceFrames:serviceFramesNow; lastDiagServiceBytes=serviceBytesNow; lastDiagServiceFrames=serviceFramesNow; const auto trialDelta=[](uint64_t v,uint64_t b)->uint64_t{return v>=b?v-b:v;}; Serial.printf("RXDETAIL service_calls=%llu service_bytes_avg=%llu service_bytes_max=%lu service_frames_avg=%llu service_frames_avg_x1000=%llu service_frames_max=%lu service_bytes_s=%llu service_frames_s=%llu rxbuf_full_obs=%lu bno_valid=%lu bno_invalid=%lu unknown=%lu uart_overflow=framework_unavailable trial_rx_bytes=%llu trial_frames=%llu trial_bno=%llu trial_crc/cobs/len=%llu/%llu/%llu\n",(unsigned long long)controlServiceCalls,(unsigned long long)(controlServiceCalls?controlServiceBytesTotal/controlServiceCalls:0),(unsigned long)controlServiceBytesMax,(unsigned long long)(controlServiceCalls?controlServiceFramesTotal/controlServiceCalls:0),(unsigned long long)(controlServiceCalls?controlServiceFramesTotal*1000/controlServiceCalls:0),(unsigned long)controlServiceFramesMax,(unsigned long long)serviceBytesRate,(unsigned long long)serviceFramesRate,(unsigned long)controlRxBufferFullObservations,(unsigned long)bnoValidFrames,(unsigned long)bnoInvalidKindFrames,(unsigned long)unknownTypeFrames,(unsigned long long)trialDelta(controlRxBytes,rxTrial.rxBytes),(unsigned long long)trialDelta(controlFrames,rxTrial.frames),(unsigned long long)trialDelta(bnoValidFrames,rxTrial.bnoValid),(unsigned long long)trialDelta(crcErrors,rxTrial.crc),(unsigned long long)trialDelta(cobsErrors,rxTrial.cobs),(unsigned long long)trialDelta(lengthErrors,rxTrial.length));
-     Serial.printf("RXTASK mode=%s read_calls=%llu zero_reads=%llu read_bytes_max=%lu rx_task_max_us=%lu rx_task_continuous_max_us=%lu stack_hwm_min_bytes=%lu cobs_delimiters=%llu rx_current=%d rx_max=%lu rx_full=%lu overflow=framework_unavailable\n",uartRxDiagModeName(),(unsigned long long)controlReadCalls,(unsigned long long)controlZeroReadCalls,(unsigned long)controlReadBytesMax,(unsigned long)controlRxTaskMaxUs,(unsigned long)controlRxTaskMaxContinuousUs,(unsigned long)(controlRxTaskStackHwmMin==UINT32_MAX?0:controlRxTaskStackHwmMin),(unsigned long long)controlCobsDelimiters,controlUart.available(),(unsigned long)controlRxBufferMax,(unsigned long)controlRxBufferFullObservations);
-      Serial.printf("SDTASK max_process_us=%lu\n",(unsigned long)sdTaskMaxProcessUs);printCompetitionCommandDiag();
+
+const char* stageName(Stage value) {
+  switch (value) {
+    case Stage::Idle: return "idle";
+    case Stage::EnsureDisarmed: return "ensure_disarmed";
+    case Stage::WaitModeAck: return "wait_mode_ack";
+    case Stage::WaitManualAck: return "wait_manual_ack";
+    case Stage::WaitArmed: return "wait_armed";
+    case Stage::WaitRunning: return "wait_running";
+    case Stage::Running: return "running";
+    case Stage::Stopping: return "stopping";
+    case Stage::Emergency: return "emergency";
+    case Stage::ClearingEmergency: return "clearing_emergency";
+    case Stage::Error: return "error";
   }
-  if(millis()-lastDrawMs>=200){lastDrawMs=millis();drawProduction();} delay(1);
+  return "unknown";
+}
+
+const char* safetyName(uint8_t value) {
+  switch (value) {
+    case 0: return "BOOT";
+    case 1: return "DISARMED";
+    case 2: return "ARMED";
+    case 3: return "RUNNING";
+    case 4: return "E-STOP";
+    case 5: return "FAULT";
+    default: return "UNKNOWN";
+  }
+}
+
+void setMessage(const char* text) {
+  snprintf(operationMessage, sizeof(operationMessage), "%s", text ? text : "");
+}
+
+void setStage(Stage next, const char* message) {
+  stage = next;
+  stageStartedMs = millis();
+  lastSafetyMs = 0;
+  if (message) setMessage(message);
+}
+
+LinkCache cacheSnapshot() {
+  LinkCache copy{};
+  portENTER_CRITICAL(&cacheMux);
+  copy = linkCache;
+  portEXIT_CRITICAL(&cacheMux);
+  return copy;
+}
+
+bool linkConnected(const LinkCache& cache) {
+  return cache.lastFrameUs && ageMs(cache.lastFrameUs, nowUs()) <= kLinkFreshMs;
+}
+
+uint8_t currentSafety(const LinkCache& cache) {
+  if (cache.hasActuators) return cache.actuators.safetyState;
+  if (cache.hasOutput) return cache.output.safety;
+  if (cache.hasHealth) return cache.health.safetyState;
+  return 0;
+}
+
+bool sendFrame(boat::Type type, const void* payload, uint16_t length) {
+  boat::Header header{boat::kVersion, static_cast<uint8_t>(type), length,
+                      ++frameSequence, bootId, nowUs(), 0};
+  uint8_t encoded[boat::kMaxEncoded]{};
+  const size_t bytes = boat::encode(
+      header, static_cast<const uint8_t*>(payload), encoded, sizeof(encoded));
+  return bytes && controlUart.write(encoded, bytes) == bytes;
+}
+
+void initializePersistentCounters() {
+  Preferences preferences;
+  preferences.begin("boatcmd2", false);
+  uint32_t request = preferences.getUInt("request", 0);
+  uint32_t sequence = preferences.getUInt("sequence", 0);
+  if (!request) request = esp_random() | 1U;
+  if (!sequence) sequence = esp_random() | 1U;
+  constexpr uint32_t kReservation = 0x01000000UL;
+  preferences.putUInt("request", request + kReservation);
+  preferences.putUInt("sequence", sequence + kReservation);
+  preferences.end();
+  requestIdNext = request;
+  commandSequenceNext = sequence;
+}
+
+uint8_t selectedMask() {
+  if (selectedChannel == 0) return boat::ManualLeft;
+  if (selectedChannel == 1) return boat::ManualRight;
+  return boat::ManualRear;
+}
+
+boat::ManualCommandPayload makeManual(uint8_t mask, float value) {
+  boat::ManualCommandPayload command{};
+  command.protocolVersion = boat::kVersion;
+  command.reserved[0] = mask;
+  command.requestId = requestIdNext++;
+  command.commandSequence = commandSequenceNext++;
+  command.sourceUs = nowUs();
+  if (mask & boat::ManualLeft) command.leftFrontWing = value;
+  if (mask & boat::ManualRight) command.rightFrontWing = value;
+  if (mask & boat::ManualRear) command.rearYaw = value;
+  command.propulsion = 0.0f;
+  command.canonicalCrc = boat::canonicalCrc(
+      &command, offsetof(boat::ManualCommandPayload, canonicalCrc));
+  return command;
+}
+
+void beginPending(boat::Type type, const void* payload, uint16_t length,
+                  uint32_t requestId, uint32_t commandSequence) {
+  pending = {};
+  pending.type = type;
+  pending.length = length;
+  pending.requestId = requestId;
+  pending.commandSequence = commandSequence;
+  pending.startedMs = millis();
+  pending.active = true;
+  memcpy(pending.payload, payload, length);
+  if (sendFrame(type, payload, length)) {
+    pending.lastSendMs = millis();
+    pending.attempts = 1;
+  }
+}
+
+void beginModeCommand() {
+  boat::ControlModeCommandPayload command{};
+  command.protocolVersion = boat::kVersion;
+  command.mode = 0;
+  command.requestId = requestIdNext++;
+  command.commandSequence = commandSequenceNext++;
+  command.sourceUs = nowUs();
+  command.canonicalCrc = boat::canonicalCrc(
+      &command, offsetof(boat::ControlModeCommandPayload, canonicalCrc));
+  beginPending(boat::Type::ControlModeCommand, &command, sizeof(command),
+               command.requestId, command.commandSequence);
+}
+
+void beginManualCommand() {
+  const boat::ManualCommandPayload command = makeManual(selectedMask(), selectedValue);
+  beginPending(boat::Type::ManualCommand, &command, sizeof(command),
+               command.requestId, command.commandSequence);
+}
+
+void sendManualRefresh() {
+  const boat::ManualCommandPayload command = makeManual(selectedMask(), selectedValue);
+  if (sendFrame(boat::Type::ManualCommand, &command, sizeof(command))) {
+    lastManualMs = millis();
+  }
+}
+
+void sendManualOff() {
+  const boat::ManualCommandPayload command = makeManual(0, 0.0f);
+  sendFrame(boat::Type::ManualCommand, &command, sizeof(command));
+}
+
+void sendSafety(boat::Type type) {
+  boat::CommandPayload command{++safetyCommandId, static_cast<uint8_t>(type), {0, 0, 0}};
+  if (sendFrame(type, &command, sizeof(command))) lastSafetyMs = millis();
+}
+
+// Returns 1 when accepted, -1 when rejected/timed out, and 0 while waiting.
+int servicePending(const LinkCache& cache) {
+  if (!pending.active) return -1;
+  if (cache.hasCommandAck && cache.commandAck.requestId == pending.requestId &&
+      cache.commandAck.commandSequence == pending.commandSequence &&
+      cache.commandAck.commandType == static_cast<uint8_t>(pending.type)) {
+    pending.active = false;
+    if (cache.commandAck.disposition == 0 ||
+        (cache.commandAck.disposition == 2 && cache.commandAck.reason == 0)) {
+      return 1;
+    }
+    char message[96];
+    snprintf(message, sizeof(message), "XIAOが指令を拒否しました（理由%u）。",
+             static_cast<unsigned>(cache.commandAck.reason));
+    setMessage(message);
+    return -1;
+  }
+
+  const uint32_t current = millis();
+  if (current - pending.startedMs > kCommandTimeoutMs) {
+    pending.active = false;
+    setMessage("XIAOから指令ACKが返りませんでした。");
+    return -1;
+  }
+  if ((!pending.lastSendMs || current - pending.lastSendMs >= kCommandRetryMs) &&
+      pending.attempts < 8) {
+    if (sendFrame(pending.type, pending.payload, pending.length)) {
+      pending.lastSendMs = current;
+      ++pending.attempts;
+    }
+  }
+  return 0;
+}
+
+void failOperation(const char* message) {
+  char savedMessage[sizeof(operationMessage)];
+  snprintf(savedMessage, sizeof(savedMessage), "%s", message ? message : operationMessage);
+  pending.active = false;
+  sendSafety(boat::Type::Stop);
+  sendManualOff();
+  setStage(Stage::Error, savedMessage);
+}
+
+void keepManualFresh() {
+  if (!lastManualMs || millis() - lastManualMs >= kManualRefreshMs) {
+    sendManualRefresh();
+  }
+}
+
+void serviceOperation() {
+  const LinkCache cache = cacheSnapshot();
+  const bool connected = linkConnected(cache);
+  const uint8_t safety = currentSafety(cache);
+  const uint32_t current = millis();
+
+  if (stage != Stage::Idle && stage != Stage::Error && !connected) {
+    failOperation("XIAOとの通信が途切れたため停止指令を送りました。");
+    return;
+  }
+
+  switch (stage) {
+    case Stage::Idle:
+      return;
+
+    case Stage::Error:
+      if (connected && safety != 1 && safety != 4 &&
+          (!lastSafetyMs || current - lastSafetyMs >= kSafetyRetryMs)) {
+        sendSafety(boat::Type::Stop);
+        sendManualOff();
+      }
+      return;
+
+    case Stage::EnsureDisarmed:
+      if (safety == 4) {
+        failOperation("緊急停止中です。解除してから開始してください。");
+      } else if (safety == 1) {
+        beginModeCommand();
+        setStage(Stage::WaitModeAck, "手動モードを設定しています。");
+      } else if (!lastSafetyMs || current - lastSafetyMs >= kSafetyRetryMs) {
+        sendSafety(boat::Type::Stop);
+        if (current - stageStartedMs > kSafetyTimeoutMs) {
+          failOperation("XIAOをDISARMEDにできませんでした。");
+        }
+      }
+      return;
+
+    case Stage::WaitModeAck: {
+      const int result = servicePending(cache);
+      if (result > 0) {
+        beginManualCommand();
+        setStage(Stage::WaitManualAck, "手動出力値を設定しています。");
+      } else if (result < 0) {
+        failOperation(operationMessage);
+      }
+      return;
+    }
+
+    case Stage::WaitManualAck: {
+      const int result = servicePending(cache);
+      if (result > 0) {
+        lastManualMs = current;
+        sendSafety(boat::Type::Arm);
+        setStage(Stage::WaitArmed, "ARMの成立を待っています。");
+      } else if (result < 0) {
+        failOperation(operationMessage);
+      }
+      return;
+    }
+
+    case Stage::WaitArmed:
+      keepManualFresh();
+      if (safety == 2) {
+        sendSafety(boat::Type::StartTest);
+        setStage(Stage::WaitRunning, "STARTの成立を待っています。");
+      } else if (safety == 4) {
+        failOperation("ARM中に緊急停止になりました。");
+      } else if (current - stageStartedMs > kSafetyTimeoutMs) {
+        failOperation("ARMできませんでした。PCA9685と配線を確認してください。");
+      } else if (!lastSafetyMs || current - lastSafetyMs >= kSafetyRetryMs) {
+        sendSafety(boat::Type::Arm);
+      }
+      return;
+
+    case Stage::WaitRunning:
+      keepManualFresh();
+      if (safety == 3) {
+        setStage(Stage::Running, "選択した1チャンネルだけを出力しています。");
+      } else if (safety == 4 || safety == 5) {
+        failOperation("START中に安全停止しました。");
+      } else if (current - stageStartedMs > kSafetyTimeoutMs) {
+        failOperation("STARTできませんでした。XIAOの状態を確認してください。");
+      } else if (!lastSafetyMs || current - lastSafetyMs >= kSafetyRetryMs) {
+        sendSafety(boat::Type::StartTest);
+      }
+      return;
+
+    case Stage::Running:
+      keepManualFresh();
+      if (safety != 3) {
+        failOperation("XIAOがRUNNINGを解除したため停止しました。");
+      }
+      return;
+
+    case Stage::Stopping:
+      if (safety == 1) {
+        sendManualOff();
+        setStage(Stage::Idle, "停止しました。すべての出力はOFFです。");
+      } else if (safety == 4) {
+        setStage(Stage::Emergency, "緊急停止中です。すべての出力はOFFです。");
+      } else if (!lastSafetyMs || current - lastSafetyMs >= kSafetyRetryMs) {
+        sendSafety(boat::Type::Stop);
+      }
+      return;
+
+    case Stage::Emergency:
+      if (safety != 4 && current - stageStartedMs > kSafetyTimeoutMs) {
+        setMessage("緊急停止状態を確認できません。物理的に電源を切ってください。");
+      } else if (safety != 4 && (!lastSafetyMs || current - lastSafetyMs >= kSafetyRetryMs)) {
+        sendSafety(boat::Type::Estop);
+      }
+      return;
+
+    case Stage::ClearingEmergency:
+      if (safety == 1) {
+        setStage(Stage::Idle, "緊急停止を解除しました。出力はOFFです。");
+      } else if (current - stageStartedMs > kSafetyTimeoutMs) {
+        failOperation("緊急停止を解除できませんでした。");
+      } else if (!lastSafetyMs || current - lastSafetyMs >= kSafetyRetryMs) {
+        sendSafety(boat::Type::ClearEstop);
+      }
+      return;
+  }
+}
+
+void processFrame(const boat::Frame& frame) {
+  const boat::Type type = static_cast<boat::Type>(frame.header.type);
+  const uint64_t receivedUs = nowUs();
+  portENTER_CRITICAL(&cacheMux);
+  linkCache.lastFrameUs = receivedUs;
+  ++linkCache.frames;
+  if (type == boat::Type::ControlSnapshot &&
+      frame.header.length == sizeof(linkCache.snapshot)) {
+    memcpy(&linkCache.snapshot, frame.payload, sizeof(linkCache.snapshot));
+    linkCache.lastSnapshotUs = receivedUs;
+    linkCache.hasSnapshot = true;
+  } else if (type == boat::Type::ControlOutput &&
+             frame.header.length == sizeof(linkCache.output)) {
+    memcpy(&linkCache.output, frame.payload, sizeof(linkCache.output));
+    linkCache.lastOutputUs = receivedUs;
+    linkCache.hasOutput = true;
+  } else if (type == boat::Type::ActuatorState &&
+             frame.header.length == sizeof(linkCache.actuators)) {
+    memcpy(&linkCache.actuators, frame.payload, sizeof(linkCache.actuators));
+    linkCache.lastActuatorUs = receivedUs;
+    linkCache.hasActuators = true;
+  } else if (type == boat::Type::SystemHealth &&
+             frame.header.length == sizeof(linkCache.health)) {
+    memcpy(&linkCache.health, frame.payload, sizeof(linkCache.health));
+    linkCache.hasHealth = true;
+  } else if (type == boat::Type::ControlCommandAck &&
+             frame.header.length == sizeof(linkCache.commandAck)) {
+    memcpy(&linkCache.commandAck, frame.payload, sizeof(linkCache.commandAck));
+    linkCache.lastAckUs = receivedUs;
+    linkCache.hasCommandAck = true;
+  }
+  portEXIT_CRITICAL(&cacheMux);
+}
+
+void controlRxTask(void*) {
+  uint8_t bytes[kRxChunkBytes];
+  for (;;) {
+    const int available = controlUart.available();
+    if (available <= 0) {
+      vTaskDelay(pdMS_TO_TICKS(1));
+      continue;
+    }
+    const size_t wanted = min<size_t>(static_cast<size_t>(available), sizeof(bytes));
+    const size_t count = controlUart.read(bytes, wanted);
+    for (size_t index = 0; index < count; ++index) {
+      boat::Frame frame{};
+      if (controlDecoder.feed(bytes[index], frame)) processFrame(frame);
+    }
+    crcErrors = controlDecoder.crcErrors;
+    cobsErrors = controlDecoder.cobsErrors;
+    lengthErrors = controlDecoder.lengthErrors;
+  }
+}
+
+void sendHeartbeat() {
+  const uint32_t current = millis();
+  if (current - lastHeartbeatMs < kHeartbeatPeriodMs) return;
+  const LinkCache cache = cacheSnapshot();
+  // A heartbeat is proof of a healthy bidirectional link.  If CoreS3 can no
+  // longer receive XIAO telemetry, stop heartbeats so XIAO's own link timeout
+  // also forces every physical output off.
+  if (!linkConnected(cache)) return;
+  lastHeartbeatMs = current;
+  boat::HeartbeatPayload heartbeat{current, frameSequence, currentSafety(cache), 0, 0};
+  sendFrame(boat::Type::Heartbeat, &heartbeat, sizeof(heartbeat));
+}
+
+bool parseFloatArgument(const char* name, float& value) {
+  const String source = web.arg(name);
+  if (!source.length()) return false;
+  char* end = nullptr;
+  value = strtof(source.c_str(), &end);
+  return end && *end == 0 && isfinite(value);
+}
+
+bool parseChannel(uint8_t& channel) {
+  const String source = web.arg("channel");
+  if (!source.length()) return false;
+  char* end = nullptr;
+  const unsigned long value = strtoul(source.c_str(), &end, 10);
+  if (!end || *end != 0 || value > 2) return false;
+  channel = static_cast<uint8_t>(value);
+  return true;
+}
+
+void sendJsonResult(int code, bool accepted, const char* message) {
+  char body[180];
+  snprintf(body, sizeof(body), "{\"accepted\":%s,\"message\":\"%s\"}",
+           accepted ? "true" : "false", message);
+  web.send(code, "application/json; charset=utf-8", body);
+}
+
+void apiStart() {
+  uint8_t channel = 0;
+  float value = 0.0f;
+  if (!parseChannel(channel) || !parseFloatArgument("value", value) ||
+      value < -1.0f || value > 1.0f) {
+    sendJsonResult(400, false, "CHまたは出力値が不正です。");
+    return;
+  }
+  const LinkCache cache = cacheSnapshot();
+  if (!linkConnected(cache)) {
+    sendJsonResult(503, false, "XIAOと通信できていません。");
+    return;
+  }
+  if (!cache.hasActuators || !cache.actuators.pcaReady) {
+    sendJsonResult(409, false, "PCA9685が準備できていません。");
+    return;
+  }
+  if (currentSafety(cache) == 4) {
+    sendJsonResult(409, false, "緊急停止を解除してください。");
+    return;
+  }
+  if (stage != Stage::Idle && stage != Stage::Error) {
+    sendJsonResult(409, false, "別の操作を処理中です。先に停止してください。");
+    return;
+  }
+  selectedChannel = channel;
+  selectedValue = value;
+  pending.active = false;
+  lastManualMs = 0;
+  setStage(Stage::EnsureDisarmed, "XIAOを停止状態にそろえています。");
+  sendJsonResult(202, true, "開始手順をCoreS3側で実行します。");
+}
+
+void apiValue() {
+  float value = 0.0f;
+  if (!parseFloatArgument("value", value) || value < -1.0f || value > 1.0f) {
+    sendJsonResult(400, false, "出力値が不正です。");
+    return;
+  }
+  if (stage != Stage::Running) {
+    sendJsonResult(409, false, "動作中ではありません。");
+    return;
+  }
+  selectedValue = value;
+  sendManualRefresh();
+  sendJsonResult(202, true, "出力値を更新しました。");
+}
+
+void apiStop() {
+  pending.active = false;
+  sendSafety(boat::Type::Stop);
+  sendManualOff();
+  setStage(Stage::Stopping, "停止を確認しています。");
+  sendJsonResult(202, true, "停止指令を送りました。");
+}
+
+void apiEstop() {
+  pending.active = false;
+  sendSafety(boat::Type::Estop);
+  sendManualOff();
+  setStage(Stage::Emergency, "緊急停止指令を送りました。");
+  sendJsonResult(202, true, "緊急停止指令を送りました。");
+}
+
+void apiClearEstop() {
+  const LinkCache cache = cacheSnapshot();
+  if (currentSafety(cache) != 4) {
+    sendJsonResult(409, false, "XIAOは緊急停止状態ではありません。");
+    return;
+  }
+  sendSafety(boat::Type::ClearEstop);
+  setStage(Stage::ClearingEmergency, "緊急停止の解除を確認しています。");
+  sendJsonResult(202, true, "緊急停止解除指令を送りました。");
+}
+
+void apiStatus() {
+  const LinkCache cache = cacheSnapshot();
+  const bool connected = linkConnected(cache);
+  const uint32_t linkAge = ageMs(cache.lastFrameUs, nowUs());
+  const uint8_t safety = currentSafety(cache);
+  char body[1300];
+  snprintf(
+      body, sizeof(body),
+      "{\"connected\":%s,\"ever_received\":%s,\"age_ms\":%lu,"
+      "\"operation\":\"%s\",\"message\":\"%s\",\"selected_channel\":%u,"
+      "\"selected_value\":%.3f,\"control\":{\"safety\":%u,\"safety_name\":\"%s\","
+      "\"mode\":%u,\"stop_reason\":%u},\"actuators\":{\"pca_ready\":%u,"
+      "\"outputs_enabled\":%u,\"enabled_mask\":%u,\"left_us\":%u,"
+      "\"right_us\":%u,\"rear_us\":%u,\"relay\":%u},"
+      "\"sensors\":{\"imu_valid\":%u,\"roll_rad\":%.4f,\"pitch_rad\":%.4f,"
+      "\"yaw_rad\":%.4f,\"tof_valid\":%u,\"tof_m\":%.3f},"
+      "\"link\":{\"frames\":%lu,\"crc_errors\":%lu,\"cobs_errors\":%lu,"
+      "\"length_errors\":%lu}}",
+      connected ? "true" : "false", cache.lastFrameUs ? "true" : "false",
+      static_cast<unsigned long>(linkAge), stageName(stage), operationMessage,
+      static_cast<unsigned>(selectedChannel), selectedValue,
+      static_cast<unsigned>(safety), safetyName(safety),
+      static_cast<unsigned>(cache.hasSnapshot ? cache.snapshot.mode : 0),
+      static_cast<unsigned>(cache.hasOutput ? cache.output.stopReason : 0),
+      static_cast<unsigned>(cache.hasActuators ? cache.actuators.pcaReady : 0),
+      static_cast<unsigned>(cache.hasActuators ? cache.actuators.outputsEnabled : 0),
+      static_cast<unsigned>(cache.hasActuators ? cache.actuators.enabledMask : 0),
+      static_cast<unsigned>(cache.hasActuators ? cache.actuators.leftPulseUs : 0),
+      static_cast<unsigned>(cache.hasActuators ? cache.actuators.rightPulseUs : 0),
+      static_cast<unsigned>(cache.hasActuators ? cache.actuators.rearPulseUs : 0),
+      static_cast<unsigned>(cache.hasActuators ? cache.actuators.motorRelayEnabled : 0),
+      static_cast<unsigned>(cache.hasSnapshot ? cache.snapshot.imuValid : 0),
+      cache.hasSnapshot ? cache.snapshot.rollRad : 0.0f,
+      cache.hasSnapshot ? cache.snapshot.pitchRad : 0.0f,
+      cache.hasSnapshot ? cache.snapshot.yawRad : 0.0f,
+      static_cast<unsigned>(cache.hasSnapshot ? cache.snapshot.tofValid : 0),
+      cache.hasSnapshot ? cache.snapshot.tofFilteredM : 0.0f,
+      static_cast<unsigned long>(cache.frames), static_cast<unsigned long>(crcErrors),
+      static_cast<unsigned long>(cobsErrors), static_cast<unsigned long>(lengthErrors));
+  web.send(200, "application/json; charset=utf-8", body);
+}
+
+void startWeb() {
+  WiFi.mode(WIFI_AP);
+  WiFi.setSleep(false);
+  WiFi.softAP(kApSsid, kApPassword);
+  web.on("/", HTTP_GET, [] { web.send(200, "text/html; charset=utf-8", productionPageJapanese); });
+  web.on("/api/status", HTTP_GET, apiStatus);
+  web.on("/api/start", HTTP_POST, apiStart);
+  web.on("/api/value", HTTP_POST, apiValue);
+  web.on("/api/stop", HTTP_POST, apiStop);
+  web.on("/api/estop", HTTP_POST, apiEstop);
+  web.on("/api/clear-estop", HTTP_POST, apiClearEstop);
+  web.onNotFound([] { web.send(404, "application/json", "{\"error\":\"not_found\"}"); });
+  web.begin();
+}
+
+void drawScreen() {
+  const LinkCache cache = cacheSnapshot();
+  const bool connected = linkConnected(cache);
+  const uint8_t safety = currentSafety(cache);
+  M5.Display.fillScreen(0x0000);
+  M5.Display.setTextColor(0xFFFF, 0x0000);
+  M5.Display.setTextSize(1);
+  M5.Display.setCursor(6, 6);
+  M5.Display.printf("CORES3 MANUAL 2.0\n");
+  M5.Display.printf("LINK %s  age %lu ms  frames %lu\n",
+                    connected ? "OK" : "WAIT",
+                    static_cast<unsigned long>(ageMs(cache.lastFrameUs, nowUs())),
+                    static_cast<unsigned long>(cache.frames));
+  M5.Display.printf("XIAO %s  CORE %s\n", safetyName(safety), stageName(stage));
+  M5.Display.printf("PCA %s  mask 0x%02X  relay %u\n",
+                    cache.hasActuators && cache.actuators.pcaReady ? "OK" : "WAIT",
+                    cache.hasActuators ? cache.actuators.enabledMask : 0,
+                    cache.hasActuators ? cache.actuators.motorRelayEnabled : 0);
+  M5.Display.printf("PWM %u / %u / %u us\n",
+                    cache.hasActuators ? cache.actuators.leftPulseUs : 0,
+                    cache.hasActuators ? cache.actuators.rightPulseUs : 0,
+                    cache.hasActuators ? cache.actuators.rearPulseUs : 0);
+  M5.Display.printf("RPY %.2f %.2f %.2f rad\n",
+                    cache.hasSnapshot ? cache.snapshot.rollRad : 0.0f,
+                    cache.hasSnapshot ? cache.snapshot.pitchRad : 0.0f,
+                    cache.hasSnapshot ? cache.snapshot.yawRad : 0.0f);
+  M5.Display.printf("ToF %.3f m  AP %s\n",
+                    cache.hasSnapshot ? cache.snapshot.tofFilteredM : 0.0f,
+                    WiFi.softAPIP().toString().c_str());
+  M5.Display.printf("UART err C/C/L %lu/%lu/%lu\n",
+                    static_cast<unsigned long>(crcErrors),
+                    static_cast<unsigned long>(cobsErrors),
+                    static_cast<unsigned long>(lengthErrors));
+}
+
+}  // namespace
+
+void setup() {
+  auto config = M5.config();
+  config.serial_baudrate = 115200;
+  M5.begin(config);
+  bootId = esp_random();
+  if (!bootId) bootId = 1;
+  frameSequence = esp_random();
+  safetyCommandId = esp_random();
+  initializePersistentCounters();
+
+  controlUart.setRxBufferSize(16384);
+  controlUart.setTimeout(2);
+  controlUart.begin(kControlUartBaud, SERIAL_8N1, kControlUartRxPin, kControlUartTxPin);
+  xTaskCreatePinnedToCore(controlRxTask, "ControlRx", 6144, nullptr, 3, &rxTaskHandle, 1);
+  startWeb();
+  drawScreen();
+
+  Serial.printf("%s %s RX=%d TX=%d baud=%lu AP=%s URL=http://%s/\n",
+                kFirmwareName, kFirmwareVersion, kControlUartRxPin, kControlUartTxPin,
+                static_cast<unsigned long>(kControlUartBaud), kApSsid,
+                WiFi.softAPIP().toString().c_str());
+}
+
+void loop() {
+  M5.update();
+  web.handleClient();
+  sendHeartbeat();
+  serviceOperation();
+  if (millis() - lastScreenMs >= kScreenPeriodMs) {
+    lastScreenMs = millis();
+    drawScreen();
+  }
+  delay(1);
 }
