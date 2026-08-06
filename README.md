@@ -16,6 +16,9 @@
 - INA226とVESC UARTを常時監視し、低電圧、過電流、VESC ERPMによる拘束判定、VESC fault、通信途絶で安全停止します。AS5600は使用しません。
 - 制御側XIAOのD10はVESCモータ安全リレーです。非ゼロDuty指令中のみHIGHとし、それ以外はLOWに固定します。
 - DISARMED、E-STOP、FAULTではPCA9685をFull OFFにし、VESCへDuty 0を送ります。
+- ManualではWeb画面で選択した出力だけを有効にし、未選択のサーボチャンネルはFull OFFにします。
+- GNSS・VESC・INA226が未接続でも、PCA9685とCoreS3–XIAO通信が正常なら接続済みサーボをManualで個別試験できます。
+- VESC応答が無効な間は推進出力とD10安全リレーを有効にしません。
 - CoreS3のWeb画面からARM、START、STOP、E-STOP、モード、手動指令、方位、ウェイポイントを操作できます。
 - CoreS3は起動時からSDへ記録し、制御出力、実PWM、電源、回転数、安全状態も保存します。
 

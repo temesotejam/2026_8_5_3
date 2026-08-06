@@ -31,9 +31,10 @@ int main(){
   auto duplicate=ingress.process(modeFrame,production_control::AuthoritativeSafety::Disarmed,controller,2100);
   assert(duplicate.ackGenerated&&duplicate.result.ack==production_control::Ack::Duplicate);
 
-  boat::ManualCommandPayload manual{};manual.protocolVersion=boat::kVersion;manual.requestId=11;manual.commandSequence=2;manual.sourceUs=2200;manual.propulsion=.25f;manual.canonicalCrc=boat::canonicalCrc(&manual,offsetof(boat::ManualCommandPayload,canonicalCrc));
+  boat::ManualCommandPayload manual{};manual.protocolVersion=boat::kVersion;manual.reserved[0]=boat::ManualLeft;manual.requestId=11;manual.commandSequence=2;manual.sourceUs=2200;manual.leftFrontWing=.25f;manual.propulsion=.25f;manual.canonicalCrc=boat::canonicalCrc(&manual,offsetof(boat::ManualCommandPayload,canonicalCrc));
   auto manualAccepted=ingress.process(commandFrame(boat::Type::ManualCommand,&manual,sizeof(manual)),production_control::AuthoritativeSafety::Disarmed,controller,2300);
   assert(manualAccepted.ackGenerated&&manualAccepted.result.ack==production_control::Ack::Accepted);
+  assert(controller.manualOutputMask()==production_control::ManualLeft);
   manual.canonicalCrc^=1;
   auto rejected=ingress.process(commandFrame(boat::Type::ManualCommand,&manual,sizeof(manual)),production_control::AuthoritativeSafety::Disarmed,controller,2400);
   assert(rejected.ackGenerated&&rejected.result.ack==production_control::Ack::Rejected);
