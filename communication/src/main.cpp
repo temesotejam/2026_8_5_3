@@ -138,6 +138,34 @@ const char* safetyName(uint8_t value) {
   }
 }
 
+const char* stopReasonName(uint8_t value) {
+  switch (value) {
+    case 0: return "NONE";
+    case 1: return "STOP";
+    case 2: return "E_STOP";
+    case 3: return "HEARTBEAT";
+    case 4: return "MANUAL_TIMEOUT";
+    case 5: return "IMU_INVALID";
+    case 6: return "IMU_STALE";
+    case 7: return "TOF_INVALID";
+    case 8: return "TOF_STALE";
+    case 9: return "GNSS_INVALID";
+    case 10: return "GNSS_STALE";
+    case 11: return "VESC_FAULT";
+    case 12: return "NONFINITE";
+    case 13: return "FINAL_WAYPOINT";
+    case 14: return "POWER_INVALID";
+    case 15: return "POWER_STALE";
+    case 16: return "LOW_VOLTAGE";
+    case 17: return "OVER_CURRENT";
+    case 18: return "MOTOR_STALL";
+    case 19: return "ATTITUDE_DANGER";
+    case 20: return "VESC_STALE";
+    case 21: return "CAVITATION";
+    default: return "UNKNOWN";
+  }
+}
+
 void setMessage(const char* text) {
   snprintf(operationMessage, sizeof(operationMessage), "%s", text ? text : "");
 }
@@ -165,6 +193,12 @@ uint8_t currentSafety(const LinkCache& cache) {
   if (cache.hasActuators) return cache.actuators.safetyState;
   if (cache.hasOutput) return cache.output.safety;
   if (cache.hasHealth) return cache.health.safetyState;
+  return 0;
+}
+
+uint8_t currentStopReason(const LinkCache& cache) {
+  if (cache.hasOutput) return cache.output.stopReason;
+  if (cache.hasHealth) return cache.health.stopReason;
   return 0;
 }
 
@@ -309,6 +343,20 @@ void failOperation(const char* message) {
   setStage(Stage::Error, savedMessage);
 }
 
+void failSafetyOperation(const LinkCache& cache, const char* phase) {
+  char message[sizeof(operationMessage)];
+  const uint8_t reason = currentStopReason(cache);
+  if (reason) {
+    snprintf(message, sizeof(message), "%s中に安全停止: %s", phase,
+             stopReasonName(reason));
+  } else if (cache.hasActuators && cache.actuators.pwmErrors) {
+    snprintf(message, sizeof(message), "%s中に安全停止: PCA9685_WRITE", phase);
+  } else {
+    snprintf(message, sizeof(message), "%s中に安全停止: 理由未受信", phase);
+  }
+  failOperation(message);
+}
+
 void keepManualFresh() {
   if (!lastManualMs || millis() - lastManualMs >= kManualRefreshMs) {
     sendManualRefresh();
@@ -394,7 +442,7 @@ void serviceOperation() {
       if (safety == 3) {
         setStage(Stage::Running, "選択した1チャンネルだけを出力しています。");
       } else if (safety == 4 || safety == 5) {
-        failOperation("START中に安全停止しました。");
+        failSafetyOperation(cache, "START");
       } else if (current - stageStartedMs > kSafetyTimeoutMs) {
         failOperation("STARTできませんでした。XIAOの状態を確認してください。");
       } else if (!lastSafetyMs || current - lastSafetyMs >= kSafetyRetryMs) {
@@ -405,7 +453,7 @@ void serviceOperation() {
     case Stage::Running:
       keepManualFresh();
       if (safety != 3) {
-        failOperation("XIAOがRUNNINGを解除したため停止しました。");
+        failSafetyOperation(cache, "RUNNING");
       }
       return;
 
@@ -612,13 +660,14 @@ void apiStatus() {
   const bool connected = linkConnected(cache);
   const uint32_t linkAge = ageMs(cache.lastFrameUs, nowUs());
   const uint8_t safety = currentSafety(cache);
-  char body[1300];
+  char body[1450];
   snprintf(
       body, sizeof(body),
       "{\"connected\":%s,\"ever_received\":%s,\"age_ms\":%lu,"
       "\"operation\":\"%s\",\"message\":\"%s\",\"selected_channel\":%u,"
       "\"selected_value\":%.3f,\"control\":{\"safety\":%u,\"safety_name\":\"%s\","
-      "\"mode\":%u,\"stop_reason\":%u},\"actuators\":{\"pca_ready\":%u,"
+      "\"mode\":%u,\"stop_reason\":%u,\"stop_reason_name\":\"%s\"},"
+      "\"actuators\":{\"pca_ready\":%u,\"pwm_errors\":%lu,"
       "\"outputs_enabled\":%u,\"enabled_mask\":%u,\"left_us\":%u,"
       "\"right_us\":%u,\"rear_us\":%u,\"relay\":%u},"
       "\"sensors\":{\"imu_valid\":%u,\"roll_rad\":%.4f,\"pitch_rad\":%.4f,"
@@ -630,8 +679,10 @@ void apiStatus() {
       static_cast<unsigned>(selectedChannel), selectedValue,
       static_cast<unsigned>(safety), safetyName(safety),
       static_cast<unsigned>(cache.hasSnapshot ? cache.snapshot.mode : 0),
-      static_cast<unsigned>(cache.hasOutput ? cache.output.stopReason : 0),
+      static_cast<unsigned>(currentStopReason(cache)),
+      stopReasonName(currentStopReason(cache)),
       static_cast<unsigned>(cache.hasActuators ? cache.actuators.pcaReady : 0),
+      static_cast<unsigned long>(cache.hasActuators ? cache.actuators.pwmErrors : 0),
       static_cast<unsigned>(cache.hasActuators ? cache.actuators.outputsEnabled : 0),
       static_cast<unsigned>(cache.hasActuators ? cache.actuators.enabledMask : 0),
       static_cast<unsigned>(cache.hasActuators ? cache.actuators.leftPulseUs : 0),
@@ -672,12 +723,13 @@ void drawScreen() {
   M5.Display.setTextColor(0xFFFF, 0x0000);
   M5.Display.setTextSize(1);
   M5.Display.setCursor(6, 6);
-  M5.Display.printf("CORES3 MANUAL 2.0\n");
+  M5.Display.printf("CORES3 MANUAL 2.1\n");
   M5.Display.printf("LINK %s  age %lu ms  frames %lu\n",
                     connected ? "OK" : "WAIT",
                     static_cast<unsigned long>(ageMs(cache.lastFrameUs, nowUs())),
                     static_cast<unsigned long>(cache.frames));
   M5.Display.printf("XIAO %s  CORE %s\n", safetyName(safety), stageName(stage));
+  M5.Display.printf("REASON %s\n", stopReasonName(currentStopReason(cache)));
   M5.Display.printf("PCA %s  mask 0x%02X  relay %u\n",
                     cache.hasActuators && cache.actuators.pcaReady ? "OK" : "WAIT",
                     cache.hasActuators ? cache.actuators.enabledMask : 0,
