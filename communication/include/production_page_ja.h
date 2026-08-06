@@ -5,107 +5,210 @@ constexpr char productionPageJapanese[]=R"HTML(
 <html lang="ja">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>水上ボート制御</title>
+<title>水上ボート 手動操作</title>
 <style>
-body{font:15px system-ui,sans-serif;background:#0d1720;color:#eef;padding:12px;max-width:920px;margin:auto}
-h2{margin:8px 0}.card{background:#182735;border-radius:10px;padding:13px;margin:10px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px}.row{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:7px 0}.status{padding:8px;border-radius:7px;background:#26394a}.ok{color:#7ee787}.warn{color:#ffd166}.bad{color:#ff7b72}.muted{color:#9fb1c1}.active{outline:3px solid #7ee787}button,input,textarea{font:inherit;padding:9px;margin:2px;border-radius:6px;border:1px solid #5c7182}button{background:#f0bd3d;color:#101820;font-weight:650}.danger{background:#ef5350;color:white}.secondary{background:#b8c4cc}input[type=range]{width:min(330px,55vw)}input[type=checkbox]{width:20px;height:20px}textarea{width:95%;height:90px}label.output{display:inline-flex;align-items:center;gap:5px;min-width:105px}pre{white-space:pre-wrap;overflow-wrap:anywhere}small{display:block;color:#b8c7d4;margin-top:5px}
+*{box-sizing:border-box}
+body{margin:0;background:#f3f5f7;color:#17212b;font:16px system-ui,sans-serif}
+main{max-width:560px;margin:auto;padding:20px}
+h1{font-size:24px;margin:4px 0 16px}
+.panel{background:#fff;border:1px solid #d8dee4;border-radius:12px;padding:18px}
+.status{margin-bottom:20px;padding:11px 13px;border-radius:8px;background:#fff3cd;color:#664d03}
+.status.ok{background:#dff4e5;color:#165c2b}.status.bad{background:#fde2e1;color:#842029}
+label{display:block;font-weight:700;margin:14px 0 7px}
+select{width:100%;font:inherit;padding:11px;border:1px solid #aab4bd;border-radius:7px;background:#fff}
+.range{display:grid;grid-template-columns:1fr 58px;gap:12px;align-items:center}
+input[type=range]{width:100%}.value{text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+.buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:22px}
+button{min-height:48px;border:0;border-radius:8px;font:700 16px system-ui;cursor:pointer}
+button:disabled{opacity:.45;cursor:not-allowed}
+.start{background:#2da44e;color:#fff}.stop{background:#d8dee4;color:#17212b}.emergency{grid-column:1/-1;background:#cf222e;color:#fff}
+.emergency.clear{background:#f0b429;color:#17212b}
+.message{min-height:24px;margin:14px 0 0;color:#57606a}
+.output{margin:12px 0 0;color:#57606a;font-size:14px}
 </style>
-<h2>水上ボート制御</h2>
-<div id="linkBanner" class="status warn">制御側XIAOの状態を確認中です…</div>
+<main>
+  <h1>水上ボート 手動操作</h1>
+  <div id="connection" class="status">接続を確認しています…</div>
+  <section class="panel">
+    <label for="channel">動かす出力</label>
+    <select id="channel">
+      <option value="0">左前翼（CH0）</option>
+      <option value="1">右前翼（CH1）</option>
+      <option value="2">後部（CH2）</option>
+    </select>
 
-<section class="card">
-  <b>1. 動作モード</b>
-  <div class="row">
-    <button id="mode0" onclick="setMode(0)">手動</button>
-    <button id="mode1" onclick="setMode(1)">姿勢補助</button>
-    <button id="mode2" onclick="setMode(2)">方位保持</button>
-    <button id="mode3" onclick="setMode(3)">ウェイポイント自動航行</button>
-  </div>
-  <div class="row">目標方位 [rad] <input id="heading" value="0" size="8"><button onclick="setHeading()">方位を設定</button></div>
-  <small>今のような部分接続試験では「手動」を使用してください。姿勢補助・方位保持にはBNO08X、自動航行にはBNO08X・GNSS・VESC系が必要です。</small>
-</section>
+    <label for="level">出力値</label>
+    <div class="range">
+      <input id="level" type="range" min="-1" max="1" step="0.01" value="0">
+      <span id="levelValue" class="value">0.00</span>
+    </div>
 
-<section class="card">
-  <b>2. 手動出力（使う出力だけチェック）</b>
-  <div class="row"><label class="output"><input id="enL" type="checkbox">左前翼 CH0</label><input id="l" type="range" min="-1" max="1" step=".01" value="0"><span id="lv">0.00</span></div>
-  <div class="row"><label class="output"><input id="enR" type="checkbox">右前翼 CH1</label><input id="r" type="range" min="-1" max="1" step=".01" value="0"><span id="rv">0.00</span></div>
-  <div class="row"><label class="output"><input id="enY" type="checkbox">後部ヨー CH2</label><input id="y" type="range" min="-1" max="1" step=".01" value="0"><span id="yv">0.00</span></div>
-  <div class="row"><label class="output"><input id="enP" type="checkbox" disabled>推進モータ</label><input id="p" type="range" min="0" max="1" step=".01" value="0" disabled><span id="pv">0.00</span></div>
-  <div class="row"><button id="manualStart" onclick="startManual()">選択した出力の連続送信を開始</button><button class="secondary" onclick="manualAllOff()">手動出力をすべてOFF</button></div>
-  <div id="manualState" class="status muted">手動出力は未選択です。</div>
-  <small>未選択のサーボはPCA9685 Full OFFです。VESC応答がない間は推進を選択できず、D10リレーはLOWのままです。</small>
-</section>
+    <div class="buttons">
+      <button id="startButton" class="start" onclick="startOutput()">開始</button>
+      <button id="stopButton" class="stop" onclick="stopOutput()">停止</button>
+      <button id="emergencyButton" class="emergency" onclick="toggleEmergency()">緊急停止</button>
+    </div>
 
-<section class="card">
-  <b>3. 安全状態</b>
-  <div class="row">
-    <button onclick="sendSafety('arm')">ARM（出力準備）</button>
-    <button onclick="sendSafety('start')">START（動作開始）</button>
-    <button onclick="sendSafety('stop')">STOP（通常停止）</button>
-    <button onclick="sendSafety('disarm')">DISARM</button>
-    <button class="danger" onclick="sendSafety('estop')">緊急停止</button>
-    <button class="secondary" onclick="sendSafety('clear_estop')">緊急停止を解除</button>
-  </div>
-  <small>手動試験の順序：手動モード → 出力を選択 → 連続送信開始 → ARM → START。停止時は全サーボFull OFF、VESC Duty 0、D10 LOWです。</small>
-</section>
-
-<section class="card">
-  <b>現在の状態</b>
-  <div id="summary" class="grid"></div>
-  <div id="notice" class="status muted">操作結果がここに表示されます。</div>
-  <details><summary>詳細データ（JSON）</summary><pre id="rawJson">受信待ち</pre></details>
-</section>
-
-<section class="card">
-  <b>ウェイポイント</b>
-  <textarea id="points" placeholder="36.000000,136.000000&#10;36.000100,136.000100"></textarea>
-  <div class="row">到達半径 [m] <input id="radius" value="1.5" size="6"><button onclick="setRoute()">DISARM中に経路を設定</button></div>
-</section>
+    <div id="message" class="message">出力先と値を決めて「開始」を押してください。</div>
+    <div id="actualOutput" class="output">全出力OFF</div>
+  </section>
+</main>
 
 <script>
-const el=id=>document.getElementById(id);
-const stateName=['起動中','DISARMED（停止）','ARMED（開始待ち）','RUNNING（動作中）','緊急停止','FAULT（異常停止）'];
-const modeName=['手動','姿勢補助','方位保持','ウェイポイント自動航行'];
-const reasonName=['なし','通常停止','緊急停止','CoreS3通信途絶','手動指令タイムアウト','IMU無効','IMU期限切れ','ToF無効','ToF期限切れ','GNSS無効','GNSS期限切れ','VESC fault','数値異常','最終点到達','電源監視無効','電源監視期限切れ','低電圧','過電流','モータ拘束','危険姿勢','VESC期限切れ','キャビテーション疑い'];
-let manualContinuous=false,lastStatus=null,postingManual=false;
-function selectedMask(){return (el('enL').checked?1:0)|(el('enR').checked?2:0)|(el('enY').checked?4:0)|(el('enP').checked?8:0)}
-function values(){return {l:el('l').value,r:el('r').value,y:el('y').value,p:el('p').value}}
-function updateValueLabels(){const v=values();el('lv').textContent=(+v.l).toFixed(2);el('rv').textContent=(+v.r).toFixed(2);el('yv').textContent=(+v.y).toFixed(2);el('pv').textContent=(+v.p).toFixed(2)}
-async function post(url,silent=false){try{const response=await fetch(url,{method:'POST'});const text=await response.text();if(!silent)el('notice').textContent=response.ok?'指令を受け付けました。制御側の状態を確認してください。':'指令を受け付けられませんでした: '+text;return response.ok}catch(error){if(!silent)el('notice').textContent='通信に失敗しました: '+error;return false}}
-function setMode(mode){return post('/api/competition/mode?mode='+mode)}
-function setHeading(){return post('/api/competition/heading?target_yaw_rad='+encodeURIComponent(el('heading').value))}
-function sendSafety(action){return post('/api/competition/safety?action='+action)}
-async function sendManual(silent=true){if(postingManual)return;postingManual=true;const v=values(),mask=selectedMask();const url='/api/competition/manual?left_front_wing='+v.l+'&right_front_wing='+v.r+'&rear_yaw='+v.y+'&propulsion='+v.p+'&enabled_mask='+mask;await post(url,silent);postingManual=false}
-function startManual(){if(!selectedMask()){el('notice').textContent='動かす出力を1つ以上チェックしてください。';return}manualContinuous=true;el('manualStart').classList.add('active');sendManual(false);renderManualState()}
-function manualAllOff(){manualContinuous=false;for(const id of ['enL','enR','enY','enP'])el(id).checked=false;for(const id of ['l','r','y','p'])el(id).value=0;updateValueLabels();el('manualStart').classList.remove('active');sendManual(false);renderManualState()}
-function setRoute(){const route=encodeURIComponent(el('points').value.trim().split(/\n+/).join(';'));return post('/api/waypoints?reach_radius_m='+encodeURIComponent(el('radius').value)+'&points='+route)}
-function renderManualState(){const mask=selectedMask(),names=[];if(mask&1)names.push('左前翼');if(mask&2)names.push('右前翼');if(mask&4)names.push('後部ヨー');if(mask&8)names.push('推進');el('manualState').textContent=manualContinuous?'連続送信中: '+names.join('・'):(names.length?'選択中（まだ連続送信していません）: '+names.join('・'):'手動出力は未選択です。')}
-function card(label,value,klass=''){return '<div class="status '+klass+'"><b>'+label+'</b><br>'+value+'</div>'}
-function renderStatus(j){
-  lastStatus=j;el('rawJson').textContent=JSON.stringify(j,null,2);
-  if(j.connected){el('linkBanner').className='status ok';el('linkBanner').textContent='制御側XIAOとの通信は正常です（最終受信 '+j.age_ms+' ms前）'}
-  else if(j.ever_received){el('linkBanner').className='status bad';el('linkBanner').textContent='制御側XIAOとの通信が途絶しました（最終受信 '+j.age_ms+' ms前）'}
-  else{el('linkBanner').className='status bad';el('linkBanner').textContent='制御側XIAOからデータを一度も受信していません。UART配線（CoreS3 GPIO8←XIAO D7、GPIO9→D6、GND共通）を確認してください。'}
-  const motorReady=!!j.motor.valid&&j.motor.fault===0;el('enP').disabled=!motorReady;el('p').disabled=!motorReady;if(!motorReady){el('enP').checked=false;el('p').value=0;updateValueLabels()}
-  const pcaReady=!!j.actuators.pca_ready,manualReady=j.connected&&pcaReady;
-  el('summary').innerHTML=card('安全状態',stateName[j.control.safety]||('不明 '+j.control.safety),j.control.safety===3?'ok':(j.control.safety>=4?'bad':'warn'))+
-    card('モード',modeName[j.control.mode]||('不明 '+j.control.mode))+
-    card('手動サーボ試験',manualReady?'可能（PCA9685・通信 正常）':'不可（PCA9685または通信を確認）',manualReady?'ok':'bad')+
-    card('BNO08X',j.attitude.valid?'有効':'未接続または無効',j.attitude.valid?'ok':'warn')+
-    card('ToF',j.height.valid?'有効 '+Number(j.height.distance_m).toFixed(3)+' m':'未接続または無効',j.height.valid?'ok':'warn')+
-    card('GNSS',j.gnss.valid?'測位有効':'未接続または未測位',j.gnss.valid?'ok':'warn')+
-    card('INA226',j.power.valid?'有効 '+Number(j.power.voltage_v).toFixed(2)+' V':'未接続または無効',j.power.valid?'ok':'warn')+
-    card('VESC',motorReady?'有効 '+Number(j.motor.erpm).toFixed(0)+' ERPM':'未接続・無効・fault',motorReady?'ok':'warn')+
-    card('サーボ実出力','左 '+j.actuators.left_us+' / 右 '+j.actuators.right_us+' / 後 '+j.actuators.rear_us+' µs')+
-    card('推進安全リレー',j.actuators.motor_relay_enabled?'D10 HIGH（接続）':'D10 LOW（切断）',j.actuators.motor_relay_enabled?'warn':'ok')+
-    card('停止・警告理由',reasonName[j.control.reason]||('コード '+j.control.reason),j.control.reason?'warn':'ok')+
-    card('UART受信','フレーム '+j.link.frames+' / CRCエラー '+j.link.crc_errors,j.link.crc_errors?'warn':'');
-  for(let i=0;i<4;i++)el('mode'+i).classList.toggle('active',j.control.mode===i);renderManualState();
+const byId=id=>document.getElementById(id);
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const stateText=['起動中','停止中','準備中','動作中','緊急停止','異常停止'];
+let lastStatus=null;
+let sending=false;
+let busy=false;
+let postingManual=false;
+
+function setMessage(text){byId('message').textContent=text}
+function channelMask(){return 1<<Number(byId('channel').value)}
+function manualUrl(mask,value){
+  let left=0,right=0,rear=0;
+  const channel=Number(byId('channel').value);
+  if(mask&1&&channel===0)left=value;
+  if(mask&2&&channel===1)right=value;
+  if(mask&4&&channel===2)rear=value;
+  return '/api/competition/manual?left_front_wing='+left+'&right_front_wing='+right+'&rear_yaw='+rear+'&propulsion=0&enabled_mask='+mask;
 }
-async function updateStatus(){try{const response=await fetch('/api/status',{cache:'no-store'});if(!response.ok)throw new Error('HTTP '+response.status);renderStatus(await response.json())}catch(error){el('linkBanner').className='status bad';el('linkBanner').textContent='CoreS3の状態取得に失敗しました: '+error}}
-for(const id of ['l','r','y','p'])el(id).addEventListener('input',updateValueLabels);
-for(const id of ['enL','enR','enY','enP'])el(id).addEventListener('change',()=>{renderManualState();if(manualContinuous)sendManual()});
-setInterval(updateStatus,250);setInterval(()=>{if(manualContinuous)sendManual()},250);updateValueLabels();renderManualState();updateStatus();
+async function post(url){
+  try{
+    const response=await fetch(url,{method:'POST'});
+    return response.ok;
+  }catch(error){
+    return false;
+  }
+}
+async function sendManual(mask=channelMask(),value=Number(byId('level').value)){
+  if(postingManual)return true;
+  postingManual=true;
+  const ok=await post(manualUrl(mask,value));
+  postingManual=false;
+  return ok;
+}
+async function fetchStatus(){
+  const response=await fetch('/api/status',{cache:'no-store'});
+  if(!response.ok)throw new Error('status');
+  const status=await response.json();
+  renderStatus(status);
+  return status;
+}
+async function waitFor(predicate,timeoutMs=1800){
+  const deadline=Date.now()+timeoutMs;
+  while(Date.now()<deadline){
+    try{if(predicate(await fetchStatus()))return true}catch(error){}
+    await sleep(100);
+  }
+  return false;
+}
+function updateButtons(){
+  const ready=lastStatus&&lastStatus.connected&&lastStatus.actuators&&lastStatus.actuators.pca_ready;
+  const blocked=lastStatus&&(lastStatus.control.safety===4||lastStatus.control.safety===5);
+  const stopped=lastStatus&&lastStatus.control.safety===1;
+  byId('startButton').disabled=busy||sending||!ready||blocked||!stopped;
+  byId('stopButton').disabled=busy||(!sending&&lastStatus&&lastStatus.control.safety===1);
+  byId('channel').disabled=busy||sending;
+  byId('emergencyButton').disabled=busy||!lastStatus||!lastStatus.connected;
+}
+function renderStatus(status){
+  lastStatus=status;
+  const banner=byId('connection');
+  if(!status.connected){
+    banner.className='status bad';
+    banner.textContent=status.ever_received?'制御側XIAOとの通信が切れています':'制御側XIAOを待っています';
+  }else if(!status.actuators.pca_ready){
+    banner.className='status bad';
+    banner.textContent='PCA9685が見つかりません';
+  }else{
+    banner.className='status ok';
+    banner.textContent='接続済み・'+(stateText[status.control.safety]||'状態不明');
+  }
+  const emergency=status.control.safety===4;
+  const emergencyButton=byId('emergencyButton');
+  emergencyButton.textContent=emergency?'緊急停止を解除':'緊急停止';
+  emergencyButton.classList.toggle('clear',emergency);
+  if(status.control.safety===3){
+    const masks=[1,2,4];
+    const channel=masks.indexOf(status.actuators.enabled_mask);
+    const pulses=[status.actuators.left_us,status.actuators.right_us,status.actuators.rear_us];
+    byId('actualOutput').textContent=channel>=0?'CH'+channel+' 出力中・'+pulses[channel]+' µs':'出力状態を確認してください';
+  }else{
+    byId('actualOutput').textContent='全出力OFF';
+    if(sending&&!busy)sending=false;
+  }
+  updateButtons();
+}
+async function failStart(message){
+  sending=false;
+  await post('/api/competition/safety?action=stop');
+  await sendManual(0,0);
+  busy=false;
+  setMessage(message);
+  updateButtons();
+}
+async function startOutput(){
+  if(busy||sending)return;
+  if(!lastStatus||!lastStatus.connected||!lastStatus.actuators.pca_ready){
+    setMessage('制御側XIAOとPCA9685の接続を確認してください。');
+    return;
+  }
+  busy=true;
+  sending=true;
+  updateButtons();
+  setMessage('開始準備中…');
+  if(!await post('/api/competition/mode?mode=0'))return failStart('手動モードにできませんでした。');
+  if(!await waitFor(status=>status.control.mode===0))return failStart('手動モードの確認に失敗しました。');
+  if(!await sendManual())return failStart('出力値を送れませんでした。');
+  if(!await post('/api/competition/safety?action=arm'))return failStart('開始準備に失敗しました。');
+  if(!await waitFor(status=>status.control.safety===2))return failStart('開始できませんでした。接続を確認してください。');
+  if(!await post('/api/competition/safety?action=start'))return failStart('開始指令を送れませんでした。');
+  if(!await waitFor(status=>status.control.safety===3))return failStart('動作開始を確認できませんでした。');
+  busy=false;
+  setMessage('選択した1チャンネルだけを出力しています。');
+  updateButtons();
+}
+async function stopOutput(){
+  if(busy)return;
+  busy=true;
+  sending=false;
+  updateButtons();
+  await post('/api/competition/safety?action=stop');
+  await sendManual(0,0);
+  byId('level').value=0;
+  byId('levelValue').textContent='0.00';
+  await waitFor(status=>status.control.safety===1);
+  busy=false;
+  setMessage('停止しました。すべての出力はOFFです。');
+  updateButtons();
+}
+async function toggleEmergency(){
+  if(busy||!lastStatus)return;
+  busy=true;
+  sending=false;
+  updateButtons();
+  if(lastStatus.control.safety===4){
+    await post('/api/competition/safety?action=clear_estop');
+    await waitFor(status=>status.control.safety===1);
+    setMessage('緊急停止を解除しました。');
+  }else{
+    await post('/api/competition/safety?action=estop');
+    await waitFor(status=>status.control.safety===4);
+    setMessage('緊急停止しました。すべての出力はOFFです。');
+  }
+  await sendManual(0,0);
+  byId('level').value=0;
+  byId('levelValue').textContent='0.00';
+  busy=false;
+  updateButtons();
+}
+byId('level').addEventListener('input',()=>{
+  byId('levelValue').textContent=Number(byId('level').value).toFixed(2);
+});
+setInterval(()=>{if(sending&&!busy)sendManual()},200);
+setInterval(()=>{fetchStatus().catch(()=>{lastStatus=null;byId('connection').className='status bad';byId('connection').textContent='CoreS3の状態を取得できません';updateButtons()})},300);
+fetchStatus().catch(()=>{});
 </script>
 </html>
 )HTML";
