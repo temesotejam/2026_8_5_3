@@ -10,6 +10,9 @@ enum class AuthoritativeSafety : uint8_t { Boot=0, Disarmed=1, ArmedIdle=2, Runn
 enum class ControlMode : uint8_t {
   Manual=0, AttitudeAssist=1, HeadingHold=2, AutoWaypoint=3, WaypointOnly=4
 };
+constexpr bool modeUsesWaypoint(ControlMode mode){return mode==ControlMode::AutoWaypoint||mode==ControlMode::WaypointOnly;}
+constexpr bool modeUsesAttitude(ControlMode mode){return mode==ControlMode::AttitudeAssist||mode==ControlMode::HeadingHold||mode==ControlMode::AutoWaypoint;}
+constexpr bool modeNeedsManual(ControlMode mode){return !modeUsesWaypoint(mode);}
 enum class Ack : uint8_t { Accepted=0, Rejected=1, Duplicate=2, Conflict=3, Stale=4, Malformed=5 };
 enum class SafetyRequest : uint8_t { None=0, Disarm=1, Fault=2 };
 enum class StopReason : uint8_t {

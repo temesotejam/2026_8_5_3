@@ -62,6 +62,7 @@ struct LinkCache {
   uint64_t lastAckUs = 0;
   uint64_t lastWaypointAckUs = 0;
   uint32_t frames = 0;
+  uint8_t latchedStopReason = 0;
   bool hasSnapshot = false;
   bool hasOutput = false;
   bool hasActuators = false;
@@ -250,9 +251,10 @@ uint8_t currentSafety(const LinkCache& cache) {
 }
 
 uint8_t currentStopReason(const LinkCache& cache) {
-  if (cache.hasOutput) return cache.output.stopReason;
-  if (cache.hasHealth) return cache.health.stopReason;
-  return 0;
+  if (cache.hasOutput && cache.output.stopReason) return cache.output.stopReason;
+  if (cache.hasHealth && cache.health.stopReason) return cache.health.stopReason;
+  if (cache.hasSnapshot && cache.snapshot.safetyReason) return cache.snapshot.safetyReason;
+  return cache.latchedStopReason;
 }
 
 bool sendFrame(boat::Type type, const void* payload, uint16_t length) {
@@ -679,11 +681,15 @@ void processFrame(const boat::Frame& frame) {
     memcpy(&linkCache.snapshot, frame.payload, sizeof(linkCache.snapshot));
     linkCache.lastSnapshotUs = receivedUs;
     linkCache.hasSnapshot = true;
+    if (linkCache.snapshot.safetyReason)
+      linkCache.latchedStopReason = linkCache.snapshot.safetyReason;
   } else if (type == boat::Type::ControlOutput &&
              frame.header.length == sizeof(linkCache.output)) {
     memcpy(&linkCache.output, frame.payload, sizeof(linkCache.output));
     linkCache.lastOutputUs = receivedUs;
     linkCache.hasOutput = true;
+    if (linkCache.output.stopReason)
+      linkCache.latchedStopReason = linkCache.output.stopReason;
     if (linkCache.output.stopReason == 13) linkCache.sawFinalWaypoint = true;
   } else if (type == boat::Type::ActuatorState &&
              frame.header.length == sizeof(linkCache.actuators)) {
@@ -694,6 +700,8 @@ void processFrame(const boat::Frame& frame) {
              frame.header.length == sizeof(linkCache.health)) {
     memcpy(&linkCache.health, frame.payload, sizeof(linkCache.health));
     linkCache.hasHealth = true;
+    if (linkCache.health.stopReason)
+      linkCache.latchedStopReason = linkCache.health.stopReason;
   } else if (type == boat::Type::ControlCommandAck &&
              frame.header.length == sizeof(linkCache.commandAck)) {
     memcpy(&linkCache.commandAck, frame.payload, sizeof(linkCache.commandAck));
@@ -830,6 +838,10 @@ void apiStart() {
   lastManualMs = 0;
   portENTER_CRITICAL(&cacheMux);
   linkCache.sawFinalWaypoint=false;
+  linkCache.latchedStopReason=0;
+  linkCache.output.stopReason=0;
+  linkCache.health.stopReason=0;
+  linkCache.snapshot.safetyReason=0;
   portEXIT_CRITICAL(&cacheMux);
   setStage(Stage::EnsureDisarmed, "XIAOを停止状態にそろえています。");
   sendJsonResult(202, true, "開始手順をCoreS3側で実行します。");

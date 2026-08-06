@@ -82,6 +82,21 @@ void testIndependentWaypointAndAttitudeModes() {
   assert(assisted.rearYaw>0);
   assert(assisted.propulsion>0);
 
+  // GNSS is required only by waypoint modes. Attitude assist must remain
+  // usable indoors and on the bench without a satellite fix.
+  auto attitudeWithoutGnss=input;
+  attitudeWithoutGnss.gnssValid=false;
+  attitudeWithoutGnss.gnssUs=0;
+  attitudeOnly.setManual({.7f,-.7f,.3f,.4f,ManualAll},attitudeWithoutGnss.nowUs);
+  const auto assistedWithoutGnss=attitudeOnly.step(attitudeWithoutGnss);
+  assert(assistedWithoutGnss.safetyRequest==SafetyRequest::None);
+  assert(assistedWithoutGnss.physicalGate);
+
+  static_assert(!modeUsesWaypoint(ControlMode::Manual));
+  static_assert(!modeUsesWaypoint(ControlMode::AttitudeAssist));
+  static_assert(modeUsesWaypoint(ControlMode::WaypointOnly));
+  static_assert(modeUsesWaypoint(ControlMode::AutoWaypoint));
+
   input.gnssValid=false;
   const auto noFix=waypointOnly.step(input);
   assert(noFix.safetyRequest==SafetyRequest::Fault);

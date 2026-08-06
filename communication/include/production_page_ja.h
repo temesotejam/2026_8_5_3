@@ -99,7 +99,7 @@ function render(state){
   if(!selectionInitialized||locked){get('waypoint-enable').checked=Boolean(state.selection.waypoint);get('attitude-enable').checked=Boolean(state.selection.attitude);get('target').value=String(state.selection.target_index);selectionInitialized=true;modeHint()}
   if(!state.connected){connection.className='status bad';connection.textContent=state.ever_received?'XIAOとの通信が切れています':'XIAOを待っています'}
   else if(!state.actuators.pca_ready){connection.className='status bad';connection.textContent='XIAO接続済み・PCA9685未接続'}
-  else{connection.className=(state.gnss.core_valid&&state.gnss.xiao_valid)?'status ok':'status';connection.textContent='XIAO '+state.control.safety_name+' / GNSS '+(state.gnss.core_valid&&state.gnss.xiao_valid?'FIX':'WAIT')+' / 衛星 '+state.gnss.satellites}
+  else{const wpSelected=get('waypoint-enable').checked,fix=state.gnss.core_valid&&state.gnss.xiao_valid;connection.className=!wpSelected||fix?'status ok':'status';connection.textContent='XIAO '+state.control.safety_name+' / '+(wpSelected?('GNSS '+(fix?'FIX':'WAIT')+' / 衛星 '+state.gnss.satellites):('GNSS不要 / 衛星 '+state.gnss.satellites))}
   get('message').textContent=state.message;const running=state.operation==='running';
   get('detail').textContent=running?state.selection.mode_name+' / PWM '+state.actuators.left_us+'・'+state.actuators.right_us+'・'+state.actuators.rear_us+' µs / Duty '+Number(state.actuators.applied_duty).toFixed(3)+' / 目標距離 '+Number(state.control.waypoint_distance_m).toFixed(1)+' m':'全出力OFF / 停止理由 '+state.control.stop_reason_name+' / PCAエラー '+state.actuators.pwm_errors;
   const emergency=state.control.safety===4;get('estop').textContent=emergency?'緊急停止を解除':'緊急停止';get('estop').classList.toggle('clear',emergency);
