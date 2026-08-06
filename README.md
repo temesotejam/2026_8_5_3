@@ -4,7 +4,7 @@
 
 | フォルダ | 基板 | 担当 |
 |---|---|---|
-| `communication/` | M5Stack CoreS3 | 最小手動Web、制御側UART通信、Heartbeat |
+| `communication/` | M5Stack CoreS3 | 全体手動Web、制御側UART通信、Heartbeat |
 | `control/` | XIAO ESP32S3 | BNO08X、ToF、INA226、VESC、PCA9685、安全管理、自動制御 |
 
 ## 実装済みの本番経路
@@ -16,10 +16,10 @@
 - INA226とVESC UARTを常時監視し、低電圧、過電流、VESC ERPMによる拘束判定、VESC fault、通信途絶で安全停止します。AS5600は使用しません。
 - 制御側XIAOのD10はVESCモータ安全リレーです。非ゼロDuty指令中のみHIGHとし、それ以外はLOWに固定します。
 - DISARMED、E-STOP、FAULTではPCA9685をFull OFFにし、VESCへDuty 0を送ります。
-- ManualではWeb画面で選択した出力だけを有効にし、未選択のサーボチャンネルはFull OFFにします。
-- GNSS・VESC・INA226が未接続でも、PCA9685とCoreS3–XIAO通信が正常なら接続済みサーボをManualで個別試験できます。
+- ManualではWeb画面から左右前翼、後部ヨー、推進を同時に指令します。
+- GNSS・VESC・INA226が未接続でも、PCA9685とCoreS3–XIAO通信が正常なら3本のサーボをManualで操作できます。
 - VESC応答が無効な間は推進出力とD10安全リレーを有効にしません。
-- CoreS3の通常Web画面は、接続状態、1チャンネルの選択、出力値、開始、停止、緊急停止だけです。
+- CoreS3の通常Web画面は、接続状態、3本のサーボ値、推進値、開始、停止、緊急停止だけです。
 - Manual設定、手動値、ARM、STARTの順序制御はブラウザではなくCoreS3本体が担当し、XIAOのACKと安全状態を確認してから次へ進みます。
 - 現在のCoreS3ファームは手動出力経路のコミッショニング版です。GNSS、SD記録、時刻同期、ウェイポイントAPIは実行経路から外してあります。
 

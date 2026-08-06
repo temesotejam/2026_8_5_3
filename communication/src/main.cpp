@@ -74,6 +74,13 @@ struct PendingCommand {
   bool active = false;
 };
 
+struct ManualValues {
+  float left = 0.0f;
+  float right = 0.0f;
+  float rear = 0.0f;
+  float propulsion = 0.0f;
+};
+
 HardwareSerial controlUart(1);
 WebServer web(kHttpPort);
 boat::Decoder controlDecoder;
@@ -97,8 +104,7 @@ uint32_t lengthErrors = 0;
 Stage stage = Stage::Idle;
 PendingCommand pending{};
 uint32_t stageStartedMs = 0;
-uint8_t selectedChannel = 0;
-float selectedValue = 0.0f;
+ManualValues manualValues{};
 char operationMessage[96] = "停止中です。";
 
 uint64_t nowUs() { return static_cast<uint64_t>(esp_timer_get_time()); }
@@ -226,23 +232,19 @@ void initializePersistentCounters() {
   commandSequenceNext = sequence;
 }
 
-uint8_t selectedMask() {
-  if (selectedChannel == 0) return boat::ManualLeft;
-  if (selectedChannel == 1) return boat::ManualRight;
-  return boat::ManualRear;
-}
+constexpr uint8_t kAllManualMask = boat::ManualAll;
 
-boat::ManualCommandPayload makeManual(uint8_t mask, float value) {
+boat::ManualCommandPayload makeManual(uint8_t mask, const ManualValues& values) {
   boat::ManualCommandPayload command{};
   command.protocolVersion = boat::kVersion;
   command.reserved[0] = mask;
   command.requestId = requestIdNext++;
   command.commandSequence = commandSequenceNext++;
   command.sourceUs = nowUs();
-  if (mask & boat::ManualLeft) command.leftFrontWing = value;
-  if (mask & boat::ManualRight) command.rightFrontWing = value;
-  if (mask & boat::ManualRear) command.rearYaw = value;
-  command.propulsion = 0.0f;
+  if (mask & boat::ManualLeft) command.leftFrontWing = values.left;
+  if (mask & boat::ManualRight) command.rightFrontWing = values.right;
+  if (mask & boat::ManualRear) command.rearYaw = values.rear;
+  if (mask & boat::ManualPropulsion) command.propulsion = values.propulsion;
   command.canonicalCrc = boat::canonicalCrc(
       &command, offsetof(boat::ManualCommandPayload, canonicalCrc));
   return command;
@@ -278,20 +280,20 @@ void beginModeCommand() {
 }
 
 void beginManualCommand() {
-  const boat::ManualCommandPayload command = makeManual(selectedMask(), selectedValue);
+  const boat::ManualCommandPayload command = makeManual(kAllManualMask, manualValues);
   beginPending(boat::Type::ManualCommand, &command, sizeof(command),
                command.requestId, command.commandSequence);
 }
 
 void sendManualRefresh() {
-  const boat::ManualCommandPayload command = makeManual(selectedMask(), selectedValue);
+  const boat::ManualCommandPayload command = makeManual(kAllManualMask, manualValues);
   if (sendFrame(boat::Type::ManualCommand, &command, sizeof(command))) {
     lastManualMs = millis();
   }
 }
 
 void sendManualOff() {
-  const boat::ManualCommandPayload command = makeManual(0, 0.0f);
+  const boat::ManualCommandPayload command = makeManual(0, ManualValues{});
   sendFrame(boat::Type::ManualCommand, &command, sizeof(command));
 }
 
@@ -440,7 +442,7 @@ void serviceOperation() {
     case Stage::WaitRunning:
       keepManualFresh();
       if (safety == 3) {
-        setStage(Stage::Running, "選択した1チャンネルだけを出力しています。");
+        setStage(Stage::Running, "全サーボと推進を手動出力しています。");
       } else if (safety == 4 || safety == 5) {
         failSafetyOperation(cache, "START");
       } else if (current - stageStartedMs > kSafetyTimeoutMs) {
@@ -563,14 +565,17 @@ bool parseFloatArgument(const char* name, float& value) {
   return end && *end == 0 && isfinite(value);
 }
 
-bool parseChannel(uint8_t& channel) {
-  const String source = web.arg("channel");
-  if (!source.length()) return false;
-  char* end = nullptr;
-  const unsigned long value = strtoul(source.c_str(), &end, 10);
-  if (!end || *end != 0 || value > 2) return false;
-  channel = static_cast<uint8_t>(value);
-  return true;
+bool parseManualValues(ManualValues& values) {
+  if (!parseFloatArgument("left", values.left) ||
+      !parseFloatArgument("right", values.right) ||
+      !parseFloatArgument("rear", values.rear) ||
+      !parseFloatArgument("propulsion", values.propulsion)) {
+    return false;
+  }
+  return values.left >= -1.0f && values.left <= 1.0f &&
+         values.right >= -1.0f && values.right <= 1.0f &&
+         values.rear >= -1.0f && values.rear <= 1.0f &&
+         values.propulsion >= 0.0f && values.propulsion <= 1.0f;
 }
 
 void sendJsonResult(int code, bool accepted, const char* message) {
@@ -581,11 +586,9 @@ void sendJsonResult(int code, bool accepted, const char* message) {
 }
 
 void apiStart() {
-  uint8_t channel = 0;
-  float value = 0.0f;
-  if (!parseChannel(channel) || !parseFloatArgument("value", value) ||
-      value < -1.0f || value > 1.0f) {
-    sendJsonResult(400, false, "CHまたは出力値が不正です。");
+  ManualValues values{};
+  if (!parseManualValues(values)) {
+    sendJsonResult(400, false, "手動出力値が不正です。");
     return;
   }
   const LinkCache cache = cacheSnapshot();
@@ -605,8 +608,7 @@ void apiStart() {
     sendJsonResult(409, false, "別の操作を処理中です。先に停止してください。");
     return;
   }
-  selectedChannel = channel;
-  selectedValue = value;
+  manualValues = values;
   pending.active = false;
   lastManualMs = 0;
   setStage(Stage::EnsureDisarmed, "XIAOを停止状態にそろえています。");
@@ -614,16 +616,16 @@ void apiStart() {
 }
 
 void apiValue() {
-  float value = 0.0f;
-  if (!parseFloatArgument("value", value) || value < -1.0f || value > 1.0f) {
-    sendJsonResult(400, false, "出力値が不正です。");
+  ManualValues values{};
+  if (!parseManualValues(values)) {
+    sendJsonResult(400, false, "手動出力値が不正です。");
     return;
   }
   if (stage != Stage::Running) {
     sendJsonResult(409, false, "動作中ではありません。");
     return;
   }
-  selectedValue = value;
+  manualValues = values;
   sendManualRefresh();
   sendJsonResult(202, true, "出力値を更新しました。");
 }
@@ -664,19 +666,23 @@ void apiStatus() {
   snprintf(
       body, sizeof(body),
       "{\"connected\":%s,\"ever_received\":%s,\"age_ms\":%lu,"
-      "\"operation\":\"%s\",\"message\":\"%s\",\"selected_channel\":%u,"
-      "\"selected_value\":%.3f,\"control\":{\"safety\":%u,\"safety_name\":\"%s\","
+      "\"operation\":\"%s\",\"message\":\"%s\","
+      "\"manual\":{\"enabled_mask\":%u,\"left\":%.3f,\"right\":%.3f,"
+      "\"rear\":%.3f,\"propulsion\":%.3f},"
+      "\"control\":{\"safety\":%u,\"safety_name\":\"%s\","
       "\"mode\":%u,\"stop_reason\":%u,\"stop_reason_name\":\"%s\"},"
       "\"actuators\":{\"pca_ready\":%u,\"pwm_errors\":%lu,"
       "\"outputs_enabled\":%u,\"enabled_mask\":%u,\"left_us\":%u,"
-      "\"right_us\":%u,\"rear_us\":%u,\"relay\":%u},"
+      "\"right_us\":%u,\"rear_us\":%u,\"relay\":%u,"
+      "\"target_duty\":%.3f,\"applied_duty\":%.3f},"
       "\"sensors\":{\"imu_valid\":%u,\"roll_rad\":%.4f,\"pitch_rad\":%.4f,"
       "\"yaw_rad\":%.4f,\"tof_valid\":%u,\"tof_m\":%.3f},"
       "\"link\":{\"frames\":%lu,\"crc_errors\":%lu,\"cobs_errors\":%lu,"
       "\"length_errors\":%lu}}",
       connected ? "true" : "false", cache.lastFrameUs ? "true" : "false",
       static_cast<unsigned long>(linkAge), stageName(stage), operationMessage,
-      static_cast<unsigned>(selectedChannel), selectedValue,
+      static_cast<unsigned>(kAllManualMask), manualValues.left, manualValues.right,
+      manualValues.rear, manualValues.propulsion,
       static_cast<unsigned>(safety), safetyName(safety),
       static_cast<unsigned>(cache.hasSnapshot ? cache.snapshot.mode : 0),
       static_cast<unsigned>(currentStopReason(cache)),
@@ -689,6 +695,8 @@ void apiStatus() {
       static_cast<unsigned>(cache.hasActuators ? cache.actuators.rightPulseUs : 0),
       static_cast<unsigned>(cache.hasActuators ? cache.actuators.rearPulseUs : 0),
       static_cast<unsigned>(cache.hasActuators ? cache.actuators.motorRelayEnabled : 0),
+      cache.hasActuators ? cache.actuators.targetDuty : 0.0f,
+      cache.hasActuators ? cache.actuators.appliedDuty : 0.0f,
       static_cast<unsigned>(cache.hasSnapshot ? cache.snapshot.imuValid : 0),
       cache.hasSnapshot ? cache.snapshot.rollRad : 0.0f,
       cache.hasSnapshot ? cache.snapshot.pitchRad : 0.0f,
@@ -723,7 +731,7 @@ void drawScreen() {
   M5.Display.setTextColor(0xFFFF, 0x0000);
   M5.Display.setTextSize(1);
   M5.Display.setCursor(6, 6);
-  M5.Display.printf("CORES3 MANUAL 2.1\n");
+  M5.Display.printf("CORES3 FULL MANUAL 3.0\n");
   M5.Display.printf("LINK %s  age %lu ms  frames %lu\n",
                     connected ? "OK" : "WAIT",
                     static_cast<unsigned long>(ageMs(cache.lastFrameUs, nowUs())),

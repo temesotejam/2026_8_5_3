@@ -5,7 +5,7 @@ constexpr char productionPageJapanese[] = R"HTML(
 <html lang="ja">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>水上ボート 手動試験</title>
+<title>水上ボート 全体手動運転</title>
 <style>
 *{box-sizing:border-box}
 body{margin:0;background:#f4f5f7;color:#18202a;font:16px system-ui,sans-serif}
@@ -14,7 +14,6 @@ h1{font-size:23px;margin:2px 0 14px}
 .status,.panel{border:1px solid #d7dce2;border-radius:10px;background:#fff;padding:14px}
 .status{margin-bottom:12px;background:#fff4ce}.status.ok{background:#dcf3e3}.status.bad{background:#fde0df}
 label{display:block;font-weight:700;margin:14px 0 7px}
-select{width:100%;font:inherit;padding:11px;border:1px solid #aeb7c0;border-radius:7px;background:#fff}
 .range{display:grid;grid-template-columns:1fr 62px;gap:10px;align-items:center}
 input[type=range]{width:100%}.number{text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
 .buttons{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:20px}
@@ -23,20 +22,31 @@ button:disabled{opacity:.42}.start{background:#24863d;color:#fff}.stop{backgroun
 .message{margin-top:14px;min-height:46px}.detail{margin-top:10px;color:#59636e;font-size:14px;line-height:1.55}
 </style>
 <main>
-  <h1>手動1チャンネル試験</h1>
+  <h1>全体手動運転</h1>
   <div id="connection" class="status">XIAOを確認しています…</div>
   <section class="panel">
-    <label for="channel">動かす出力</label>
-    <select id="channel">
-      <option value="0">左前翼 CH0</option>
-      <option value="1">右前翼 CH1</option>
-      <option value="2">後部ヨー CH2</option>
-    </select>
-
-    <label for="value">出力値</label>
+    <label for="left">左前翼 CH0</label>
     <div class="range">
-      <input id="value" type="range" min="-1" max="1" step="0.01" value="0">
-      <span id="number" class="number">0.00</span>
+      <input id="left" type="range" min="-1" max="1" step="0.01" value="0">
+      <span id="left-number" class="number">0.00</span>
+    </div>
+
+    <label for="right">右前翼 CH1</label>
+    <div class="range">
+      <input id="right" type="range" min="-1" max="1" step="0.01" value="0">
+      <span id="right-number" class="number">0.00</span>
+    </div>
+
+    <label for="rear">後部ヨー CH2</label>
+    <div class="range">
+      <input id="rear" type="range" min="-1" max="1" step="0.01" value="0">
+      <span id="rear-number" class="number">0.00</span>
+    </div>
+
+    <label for="propulsion">推進</label>
+    <div class="range">
+      <input id="propulsion" type="range" min="0" max="1" step="0.01" value="0">
+      <span id="propulsion-number" class="number">0.00</span>
     </div>
 
     <div class="buttons">
@@ -45,7 +55,7 @@ button:disabled{opacity:.42}.start{background:#24863d;color:#fff}.stop{backgroun
       <button id="estop" class="estop">緊急停止</button>
     </div>
 
-    <div id="message" class="message">出力先と値を決めて開始してください。</div>
+    <div id="message" class="message">4つの出力値を決めて開始してください。</div>
     <div id="detail" class="detail">全出力OFF</div>
   </section>
 </main>
@@ -53,9 +63,15 @@ button:disabled{opacity:.42}.start{background:#24863d;color:#fff}.stop{backgroun
 const get=id=>document.getElementById(id);
 let latest=null;
 let posting=false;
+let requestsInFlight=0;
+const outputIds=['left','right','rear','propulsion'];
+
+function manualQuery(){
+  return outputIds.map(id=>id+'='+encodeURIComponent(get(id).value)).join('&');
+}
 
 async function post(path){
-  if(posting)return;
+  requestsInFlight++;
   posting=true;
   try{
     const response=await fetch(path,{method:'POST'});
@@ -64,7 +80,8 @@ async function post(path){
   }catch(error){
     get('message').textContent='CoreS3へ指令を送れませんでした。';
   }
-  posting=false;
+  requestsInFlight--;
+  posting=requestsInFlight>0;
 }
 
 function render(state){
@@ -83,10 +100,9 @@ function render(state){
   get('message').textContent=state.message;
   const running=state.operation==='running';
   get('detail').textContent=running
-    ? 'CH'+state.selected_channel+' 出力中 / PWM '+state.actuators.left_us+'・'+state.actuators.right_us+'・'+state.actuators.rear_us+' µs'
+    ? 'PWM '+state.actuators.left_us+'・'+state.actuators.right_us+'・'+state.actuators.rear_us+' µs / 推進Duty '+Number(state.actuators.applied_duty).toFixed(3)+' / D10 '+(state.actuators.relay?'HIGH':'LOW')
     : '全出力OFF / 停止理由 '+state.control.stop_reason_name+' / PCAエラー '+state.actuators.pwm_errors;
   get('start').disabled=posting||!state.connected||!state.actuators.pca_ready||(!['idle','error'].includes(state.operation));
-  get('channel').disabled=running||posting;
   get('stop').disabled=posting;
   const emergency=state.control.safety===4;
   get('estop').textContent=emergency?'緊急停止を解除':'緊急停止';
@@ -106,11 +122,13 @@ async function poll(){
   }
 }
 
-get('value').addEventListener('input',()=>get('number').textContent=Number(get('value').value).toFixed(2));
-get('value').addEventListener('change',()=>{
-  if(latest&&latest.operation==='running')post('/api/value?value='+encodeURIComponent(get('value').value));
-});
-get('start').addEventListener('click',()=>post('/api/start?channel='+get('channel').value+'&value='+encodeURIComponent(get('value').value)));
+outputIds.forEach(id=>get(id).addEventListener('input',()=>{
+  get(id+'-number').textContent=Number(get(id).value).toFixed(2);
+}));
+outputIds.forEach(id=>get(id).addEventListener('change',()=>{
+  if(latest&&latest.operation==='running')post('/api/value?'+manualQuery());
+}));
+get('start').addEventListener('click',()=>post('/api/start?'+manualQuery()));
 get('stop').addEventListener('click',()=>post('/api/stop'));
 get('estop').addEventListener('click',()=>post(latest&&latest.control.safety===4?'/api/clear-estop':'/api/estop'));
 setInterval(poll,300);
