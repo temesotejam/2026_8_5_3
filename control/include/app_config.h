@@ -5,10 +5,11 @@
 namespace app_config {
 
 constexpr char kFirmwareName[]="xiao-boat-control-integration";
-constexpr char kFirmwareVersion[]="1.0.0-production";
+constexpr char kFirmwareVersion[]="1.0.1-production";
 constexpr int kPeripheralSdaPin=D1,kPeripheralSclPin=D0;
 constexpr int kBnoRstPin=D2,kBnoIntPin=D3,kBnoSdaPin=D4,kBnoSclPin=D5;
-constexpr int kLinkRxPin=D6,kLinkTxPin=D7,kVescRxPin=D8,kVescTxPin=D9,kFuturePcaOePin=D10;
+constexpr int kLinkRxPin=D6,kLinkTxPin=D7,kVescRxPin=D8,kVescTxPin=D9,kMotorRelayPin=D10;
+constexpr bool kMotorRelayActiveHigh=true;
 constexpr uint8_t kBnoAddress=0x4A,kBnoAlternateAddress=0x4B,kTofAddress=0x29,kInaAddress=0x44,kPcaAddress=0x40;
 constexpr uint32_t kBnoI2cHz=100000UL,kPeripheralI2cHz=experiment_config::kPeripheralI2cHz,kAccelGyroIntervalUs=20000UL,kRotationIntervalUs=20000UL,kMagneticIntervalUs=50000UL;
 constexpr uint16_t kBnoEventQueueDepth=96; constexpr uint8_t kBnoServiceCallBudget=8;

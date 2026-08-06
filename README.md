@@ -14,6 +14,7 @@
 - ToF高さ、BNO姿勢・角速度を使って左右前翼と後部ヨーを50 Hzで制御します。
 - CH0は左前翼、CH1は右前翼、CH2は後部ヨーです。
 - INA226とVESC UARTを常時監視し、低電圧、過電流、VESC ERPMによる拘束判定、VESC fault、通信途絶で安全停止します。AS5600は使用しません。
+- 制御側XIAOのD10はVESCモータ安全リレーです。非ゼロDuty指令中のみHIGHとし、それ以外はLOWに固定します。
 - DISARMED、E-STOP、FAULTではPCA9685をFull OFFにし、VESCへDuty 0を送ります。
 - CoreS3のWeb画面からARM、START、STOP、E-STOP、モード、手動指令、方位、ウェイポイントを操作できます。
 - CoreS3は起動時からSDへ記録し、制御出力、実PWM、電源、回転数、安全状態も保存します。
