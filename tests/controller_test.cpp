@@ -102,6 +102,10 @@ void testActuatorMapping() {
   assert(first>0&&first<.02f);
   ramp.stopImmediate();
   assert(ramp.applied()==0);
+  assert(!motorRelayRequired(0.0f));
+  assert(motorRelayRequired(first));
+  assert(motorRelayRequired(-first));
+  assert(!motorRelayRequired(NAN));
 }
 
 int main() {

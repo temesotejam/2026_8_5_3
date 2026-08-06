@@ -22,7 +22,7 @@ AS5600は使用しません。推進モータの回転状態はVESC UARTのERPM�
 | D7 | 44 | CoreS3 UART TX |
 | D8 | 7 | VESC UART RX |
 | D9 | 8 | VESC UART TX |
-| D10 | 9 | PCA9685 OE予約 |
+| D10 | 9 | VESCモータ安全リレー（HIGHで接続、LOWで切断） |
 
 周辺I2CにはToF `0x29`、PCA9685 `0x40`、INA226 `0x44`を接続します。BNO08Xは専用I2C `0x4A`（代替`0x4B`）です。
 
@@ -66,6 +66,8 @@ START後に次のどれかを検出すると、推進Dutyを即時0、PCA9685を
 - 非有限値、危険姿勢、E-STOP
 
 ToFだけが一時的に無効になった場合は、高さ項を0にして姿勢制御を継続し、テレメトリへdegraded flagを残します。
+
+D10の安全リレーは起動直後からLOWです。VESCへ非ゼロDutyを送る直前だけHIGHにし、Duty 0では0指令を送信してからLOWに戻します。STOP、DISARM、E-STOP、FAULT、通信途絶、DRY RUN、VESC指令のUART送信失敗時もLOWです。VESCのテレメトリ要求だけではHIGHになりません。リレー状態は`ActuatorState.motorRelayEnabled`としてCoreS3、Web API、SDログへ送ります。
 
 ## Web操作
 

@@ -28,8 +28,17 @@ void linkService(){while(true){portENTER_CRITICAL(&linkMux);if(!linkUsed){portEX
 void sendBnoPipelineDiagnostics(){const bno::PipelineMetrics p=imu.metrics();uint32_t sent=0,dropped=0;portENTER_CRITICAL(&bnoMetricsMux);sent=bnoLinkFrames;dropped=bnoLinkFrameDrops;portEXIT_CRITICAL(&bnoMetricsMux);sendTofDiagnostic(29,p.callbackEvents,p.eventQueueDrops);sendTofDiagnostic(30,((uint32_t)p.eventQueueHighWater<<16)|p.decodeErrors);sendTofDiagnostic(31,p.serviceCalls,p.maxServiceUs);sendTofDiagnostic(32,sent,dropped);}
 void linkTxTask(void*){uint32_t lastHeartbeat=0;for(;;){const uint32_t now=millis();if(now-lastHeartbeat>=kControlHeartbeatIntervalMs){lastHeartbeat=now;boat::HeartbeatPayload h{now,currentLinkSequence(),(uint8_t)safety,(uint8_t)kDryRunActuators,0};linkSend(boat::Type::Heartbeat,(uint8_t*)&h,sizeof(h));}linkService();vTaskDelay(1);}}
 uint16_t crc16(const uint8_t*d,size_t n){return vesc::Parser::crc16(d,n);}
-void vescSend(const uint8_t*p,uint8_t n){if(!kPhysicalOutputCompileEnabled){(void)p;(void)n;return;}uint16_t c=crc16(p,n);vescUart.write(2);vescUart.write(n);vescUart.write(p,n);vescUart.write(c>>8);vescUart.write(c);vescUart.write(3);}
-void vescDutyRaw(float duty){if(!kPhysicalOutputCompileEnabled){(void)duty;return;}if(kDryRunActuators&&duty!=0)return;int32_t x=(int32_t)(constrain(duty,-kVescMaxDuty,kVescMaxDuty)*100000.0f);uint8_t p[5]={5,(uint8_t)(x>>24),(uint8_t)(x>>16),(uint8_t)(x>>8),(uint8_t)x};vescSend(p,5);}
+void setMotorRelay(bool enabled){motorRelayEnabled=enabled;digitalWrite(kMotorRelayPin,(enabled==kMotorRelayActiveHigh)?HIGH:LOW);}
+bool vescSend(const uint8_t*p,uint8_t n){if(!kPhysicalOutputCompileEnabled){(void)p;(void)n;return false;}uint16_t c=crc16(p,n);size_t written=0;written+=vescUart.write(2);written+=vescUart.write(n);written+=vescUart.write(p,n);written+=vescUart.write(c>>8);written+=vescUart.write(c);written+=vescUart.write(3);return written==static_cast<size_t>(n)+5;}
+void vescDutyRaw(float duty){
+  const bool moving=production_control::motorRelayRequired(duty);
+  if(!kPhysicalOutputCompileEnabled||(kDryRunActuators&&moving)){setMotorRelay(false);return;}
+  const float limited=moving?constrain(duty,-kVescMaxDuty,kVescMaxDuty):0.0f;
+  if(moving)setMotorRelay(true);
+  int32_t x=(int32_t)(limited*100000.0f);uint8_t p[5]={5,(uint8_t)(x>>24),(uint8_t)(x>>16),(uint8_t)(x>>8),(uint8_t)x};
+  const bool sent=vescSend(p,5);
+  if(!moving||!sent)setMotorRelay(false);
+}
 void safeOutputs(){
   vescTargetDuty=vescAppliedDuty=0.0f;vescRamp.stopImmediate();vescDutyRaw(0);
   if(kPhysicalOutputCompileEnabled&&pcaReady&&!competitionOutputsOff){if(pca.allOff())competitionPwmWrites+=16;else ++competitionPwmErrors;}

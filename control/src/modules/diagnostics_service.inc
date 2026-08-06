@@ -124,10 +124,10 @@ void printRuntimeDiagnostics() {
   printCompetitionCommandDiag();
   Serial.printf(
       "ACTUATOR pwm_writes=%lu pwm_errors=%lu vesc_target=%.4f "
-      "vesc_applied=%.4f vesc_duty=%.4f erpm=%.1f fault=%u state=%s\n",
+      "vesc_applied=%.4f relay=%u vesc_duty=%.4f erpm=%.1f fault=%u state=%s\n",
       static_cast<unsigned long>(competitionPwmWrites),
       static_cast<unsigned long>(competitionPwmErrors), vescTargetDuty,
-      vescAppliedDuty, vescValues.duty, vescValues.erpm, vescValues.fault,
+      vescAppliedDuty, motorRelayEnabled?1:0, vescValues.duty, vescValues.erpm, vescValues.fault,
       stateName(safety));
 }
 
