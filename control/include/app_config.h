@@ -31,6 +31,8 @@ constexpr float kCompetitionServoMinUs=1200.0f,kCompetitionServoNeutralUs=1500.0
 constexpr bool kCompetitionLeftReversed=false,kCompetitionRightReversed=false,kCompetitionRearReversed=false;
 constexpr float kCompetitionKpPitch=0.80f,kCompetitionKdPitch=0.10f,kCompetitionKpRoll=1.25f,kCompetitionKdRoll=0.22f,kCompetitionKpHeight=0.75f,kCompetitionKpYaw=0.90f,kCompetitionKdYaw=0.12f;
 constexpr float kCompetitionTargetHeightM=0.45f,kCompetitionAutoPropulsion=0.55f,kCompetitionWaypointReachM=1.5f,kCompetitionLosLookaheadM=4.0f;
+// With the current +/-300 us calibrated range, 0.50 is approximately +/-15 deg.
+constexpr float kCompetitionAttitudeServoLimit=0.50f;
 // Current operation is continuously supervised by a person. Set true only
 // when an unattended operating procedure defines and validates a safe angle.
 constexpr bool kEnableAttitudeDangerTrip=false;

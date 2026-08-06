@@ -78,6 +78,8 @@ void testIndependentWaypointAndAttitudeModes() {
   attitudeOnly.setManual({.7f,-.7f,.3f,.4f,ManualAll},input.nowUs);
   const auto assisted=attitudeOnly.step(input);
   assert(assisted.safetyRequest==SafetyRequest::None);
+  assert(std::fabs(assisted.leftPrelimit)<=.50f);
+  assert(std::fabs(assisted.rightPrelimit)<=.50f);
   assert(assisted.leftFront!=0||assisted.rightFront!=0);
   assert(assisted.rearYaw>0);
   assert(assisted.propulsion>0);

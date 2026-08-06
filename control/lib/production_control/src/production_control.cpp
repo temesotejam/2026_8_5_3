@@ -121,7 +121,8 @@ Output Controller::step(const SensorInput& input){
         output.uPitch=clampf(output.uPitch*1.5f,-1.0f,1.0f);output.uHeight=0;output.uRoll*=.25f;output.flags|=PitchPriority;
       }
       const float common=output.uPitch+output.uHeight;
-      output.leftPrelimit=common+output.uRoll;output.rightPrelimit=common-output.uRoll;
+      output.leftPrelimit=clampf(common+output.uRoll,-config_.attitudeServoLimit,config_.attitudeServoLimit);
+      output.rightPrelimit=clampf(common-output.uRoll,-config_.attitudeServoLimit,config_.attitudeServoLimit);
     }else{
       // WaypointOnly keeps both front-wing servos actively at neutral while
       // removing roll, pitch, and ToF-height corrections.

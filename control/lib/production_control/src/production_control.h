@@ -60,6 +60,7 @@ struct Config {
   float kpPitch=.8f,kdPitch=.10f,kpRoll=1.25f,kdRoll=.22f;
   float kpHeight=.75f,kpYaw=.90f,kdYaw=.12f;
   float targetPitch=0,targetRoll=0,targetHeightM=.45f;
+  float attitudeServoLimit=.50f;
   float autoPropulsion=.55f,slewPerStep=.04f,waypointReachM=1.5f;
   float losLookaheadM=4.0f,minCourseSpeedMps=.5f;
   float pitchPriorityRad=.35f,attitudeStopRad=.61f;
