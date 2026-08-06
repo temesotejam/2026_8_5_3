@@ -5,7 +5,7 @@
 namespace app_config {
 
 constexpr char kFirmwareName[]="xiao-boat-control-integration";
-constexpr char kFirmwareVersion[]="1.2.3-direct-servo-command";
+constexpr char kFirmwareVersion[]="1.2.4-servo-spike-filter";
 constexpr int kPeripheralSdaPin=D1,kPeripheralSclPin=D0;
 constexpr int kBnoRstPin=D2,kBnoIntPin=D3,kBnoSdaPin=D4,kBnoSclPin=D5;
 constexpr int kLinkRxPin=D6,kLinkTxPin=D7,kVescRxPin=D8,kVescTxPin=D9,kMotorRelayPin=D10;
@@ -33,6 +33,9 @@ constexpr float kCompetitionKpPitch=0.80f,kCompetitionKdPitch=0.10f,kCompetition
 constexpr float kCompetitionTargetHeightM=0.45f,kCompetitionAutoPropulsion=0.55f,kCompetitionWaypointReachM=1.5f,kCompetitionLosLookaheadM=4.0f;
 // With the current +/-300 us calibrated range, 0.50 is approximately +/-15 deg.
 constexpr float kCompetitionAttitudeServoLimit=0.50f;
+// Ignore a one-frame attitude-servo jump larger than about 3 degrees. A
+// second 50 Hz frame in the same direction confirms it with only 20 ms delay.
+constexpr float kCompetitionServoSpikeThreshold=0.10f;
 // Current operation is continuously supervised by a person. Set true only
 // when an unattended operating procedure defines and validates a safe angle.
 constexpr bool kEnableAttitudeDangerTrip=false;
