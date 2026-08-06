@@ -4,7 +4,7 @@
 
 | フォルダ | 基板 | 担当 |
 |---|---|---|
-| `communication/` | M5Stack CoreS3 | GNSS、SD自動記録、Web操作画面、制御側UART通信 |
+| `communication/` | M5Stack CoreS3 | 最小手動Web、制御側UART通信、Heartbeat |
 | `control/` | XIAO ESP32S3 | BNO08X、ToF、INA226、VESC、PCA9685、安全管理、自動制御 |
 
 ## 実装済みの本番経路
@@ -19,8 +19,9 @@
 - ManualではWeb画面で選択した出力だけを有効にし、未選択のサーボチャンネルはFull OFFにします。
 - GNSS・VESC・INA226が未接続でも、PCA9685とCoreS3–XIAO通信が正常なら接続済みサーボをManualで個別試験できます。
 - VESC応答が無効な間は推進出力とD10安全リレーを有効にしません。
-- CoreS3の通常Web画面は、接続状態、1チャンネルの選択、出力値、開始、停止、緊急停止だけに絞っています。開始時のManual設定、ARM、STARTは画面内部で順番に実行します。
-- CoreS3は起動時からSDへ記録し、制御出力、実PWM、電源、回転数、安全状態も保存します。
+- CoreS3の通常Web画面は、接続状態、1チャンネルの選択、出力値、開始、停止、緊急停止だけです。
+- Manual設定、手動値、ARM、STARTの順序制御はブラウザではなくCoreS3本体が担当し、XIAOのACKと安全状態を確認してから次へ進みます。
+- 現在のCoreS3ファームは手動出力経路のコミッショニング版です。GNSS、SD記録、時刻同期、ウェイポイントAPIは実行経路から外してあります。
 
 ## ビルド
 
