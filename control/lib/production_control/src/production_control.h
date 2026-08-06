@@ -23,7 +23,8 @@ struct CommandResult {
 };
 struct ManualCommand {
   float leftFront,rightFront,rearYaw,propulsion;
-  constexpr ManualCommand(float left=0,float right=0,float rear=0,float thrust=0):leftFront(left),rightFront(right),rearYaw(rear),propulsion(thrust){}
+  uint8_t enabledMask;
+  constexpr ManualCommand(float left=0,float right=0,float rear=0,float thrust=0,uint8_t mask=0):leftFront(left),rightFront(right),rearYaw(rear),propulsion(thrust),enabledMask(mask){}
 };
 struct Waypoint { float northM=0,eastM=0; };
 
@@ -69,7 +70,13 @@ struct Config {
 
 enum OutputFlag : uint16_t {
   HeightDegraded=1u<<0, PitchPriority=1u<<1, VoltageLimited=1u<<2,
-  CurrentLimited=1u<<3, CavitationLimited=1u<<4, YawScheduled=1u<<5
+  CurrentLimited=1u<<3, CavitationLimited=1u<<4, YawScheduled=1u<<5,
+  PropulsionUnavailable=1u<<6
+};
+
+enum ManualOutputMask : uint8_t {
+  ManualLeft=1u<<0, ManualRight=1u<<1, ManualRear=1u<<2,
+  ManualPropulsion=1u<<3, ManualAll=ManualLeft|ManualRight|ManualRear|ManualPropulsion
 };
 
 struct Output {
@@ -82,7 +89,7 @@ struct Output {
   StopReason reason=StopReason::None;
   SafetyRequest safetyRequest=SafetyRequest::None;
   uint16_t flags=0;
-  uint8_t activeWaypoint=0;
+  uint8_t activeWaypoint=0,enabledMask=0;
   bool saturated=false,physicalGate=false,waypointReached=false;
 };
 
@@ -99,6 +106,7 @@ class Controller {
   Output step(const SensorInput& input);
   ControlMode mode() const { return mode_; }
   uint64_t manualReceivedUs() const { return manualReceivedUs_; }
+  uint8_t manualOutputMask() const { return manual_.enabledMask; }
   uint8_t waypointCount() const { return waypointCount_; }
   uint8_t activeWaypoint() const { return activeWaypoint_; }
   static bool physicalConfigurationValid(const PhysicalConfig& config);

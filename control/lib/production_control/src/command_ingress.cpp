@@ -4,7 +4,7 @@
 namespace production_control {
 namespace {
 bool validManual(const boat::ManualCommandPayload& c) {
-  return std::isfinite(c.leftFrontWing) && std::isfinite(c.rightFrontWing) && std::isfinite(c.rearYaw) && std::isfinite(c.propulsion) && c.leftFrontWing >= -1 && c.leftFrontWing <= 1 && c.rightFrontWing >= -1 && c.rightFrontWing <= 1 && c.rearYaw >= -1 && c.rearYaw <= 1 && c.propulsion >= 0 && c.propulsion <= 1;
+  return std::isfinite(c.leftFrontWing) && std::isfinite(c.rightFrontWing) && std::isfinite(c.rearYaw) && std::isfinite(c.propulsion) && c.leftFrontWing >= -1 && c.leftFrontWing <= 1 && c.rightFrontWing >= -1 && c.rightFrontWing <= 1 && c.rearYaw >= -1 && c.rearYaw <= 1 && c.propulsion >= 0 && c.propulsion <= 1 && !(c.reserved[0]&~boat::ManualAll) && c.reserved[1]==0 && c.reserved[2]==0;
 }
 CommandIngressResult malformed(uint8_t type, uint64_t received, CommandReason reason, CommandIngressMetrics& metrics) {
   ++metrics.malformed; ++metrics.ackGenerated; CommandIngressResult r{}; r.recognized=true; r.ackGenerated=true; r.malformed=true; r.commandType=type; r.receivedUs=received; r.result={Ack::Rejected,(uint16_t)reason}; return r;
@@ -43,7 +43,7 @@ CommandIngressResult CommandIngress::process(const boat::Frame& frame, Authorita
   if(out.decision==ReplayDecision::Stale) { ++metrics_.stale; const bool ambiguous=replay_.hasHighWatermark() && CommandReplayWindow::ambiguous(out.commandSequence,replay_.highWatermark()); if(ambiguous) ++metrics_.ambiguousSequences; out.result={Ack::Stale,(uint16_t)(ambiguous?CommandReason::AmbiguousSequence:CommandReason::ReplayStale)}; out.ackGenerated=true; ++metrics_.ackGenerated; return out; }
   ++metrics_.newCommands;
   if((boat::Type)type==boat::Type::ControlModeCommand) { boat::ControlModeCommandPayload c{}; memcpy(&c,frame.payload,sizeof(c)); out.result=controller.setMode((ControlMode)c.mode,c.requestId,safety); }
-  else if((boat::Type)type==boat::Type::ManualCommand) { boat::ManualCommandPayload c{}; memcpy(&c,frame.payload,sizeof(c)); out.result=controller.setManual({c.leftFrontWing,c.rightFrontWing,c.rearYaw,c.propulsion},receivedUs); }
+  else if((boat::Type)type==boat::Type::ManualCommand) { boat::ManualCommandPayload c{}; memcpy(&c,frame.payload,sizeof(c)); out.result=controller.setManual({c.leftFrontWing,c.rightFrontWing,c.rearYaw,c.propulsion,c.reserved[0]},receivedUs); }
   else { boat::HeadingTargetPayload c{}; memcpy(&c,frame.payload,sizeof(c)); out.result=controller.setHeading(c.targetYawRad,c.requestId); }
   if(out.result.ack==Ack::Accepted) { ++metrics_.appliedCommands; out.appliedUs=receivedUs; } else ++metrics_.rejectedCommands;
   save(replay_,out,version,length,fingerprint); out.ackGenerated=true; ++metrics_.ackGenerated; return out;

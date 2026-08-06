@@ -11,7 +11,7 @@ class Manager {
   static constexpr uint8_t kSlots=8;
   explicit Manager(Config c=Config{}):config_(c){}
   bool queueMode(uint8_t mode,uint32_t requestId,uint32_t sequence,uint32_t frameSequence,uint64_t sourceUs,uint32_t bootId);
-  bool queueManual(float left,float right,float rear,float propulsion,uint32_t requestId,uint32_t sequence,uint32_t frameSequence,uint64_t sourceUs,uint32_t bootId);
+  bool queueManual(float left,float right,float rear,float propulsion,uint8_t enabledMask,uint32_t requestId,uint32_t sequence,uint32_t frameSequence,uint64_t sourceUs,uint32_t bootId);
   bool queueHeading(float targetYaw,uint32_t requestId,uint32_t sequence,uint32_t frameSequence,uint64_t sourceUs,uint32_t bootId);
   bool service(uint64_t nowUs,size_t(*write)(const uint8_t*,size_t,void*),void* context);
   bool handleAck(const boat::Frame& frame,uint64_t nowUs);

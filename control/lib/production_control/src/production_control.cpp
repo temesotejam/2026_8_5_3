@@ -30,6 +30,7 @@ CommandResult Controller::setMode(ControlMode mode,uint32_t,AuthoritativeSafety 
 CommandResult Controller::setManual(const ManualCommand& command,uint64_t receivedUs){
   if(!finite(command.leftFront)||!finite(command.rightFront)||!finite(command.rearYaw)||!finite(command.propulsion))return{Ack::Rejected,3};
   if(command.leftFront<-1||command.leftFront>1||command.rightFront<-1||command.rightFront>1||command.rearYaw<-1||command.rearYaw>1||command.propulsion<0||command.propulsion>1)return{Ack::Rejected,4};
+  if(command.enabledMask&~ManualAll)return{Ack::Rejected,4};
   manual_=command;manualReceivedUs_=receivedUs;return{Ack::Accepted,0};
 }
 CommandResult Controller::setHeading(float yawRad,uint32_t){
@@ -86,7 +87,6 @@ Output Controller::step(const SensorInput& input){
   Output output{};output.safety=input.safety;output.mode=mode_;output.activeWaypoint=activeWaypoint_;
   if(input.safety!=AuthoritativeSafety::Running){safe(output,input.safety==AuthoritativeSafety::EStop?StopReason::EStop:StopReason::None,SafetyRequest::None);return output;}
   if(!fresh(input.heartbeat,input.heartbeatUs,input.nowUs,config_.heartbeatStaleUs)){safe(output,StopReason::Heartbeat,SafetyRequest::Fault);return output;}
-  if(input.vescFault){safe(output,StopReason::VescFault,SafetyRequest::Fault);return output;}
   const bool manualMode=mode_==ControlMode::Manual;
   const bool needsManual=mode_!=ControlMode::AutoWaypoint;
   if(needsManual&&!fresh(true,manualReceivedUs_,input.nowUs,config_.manualStaleUs)){safe(output,StopReason::ManualTimeout,SafetyRequest::Disarm);return output;}
@@ -95,9 +95,13 @@ Output Controller::step(const SensorInput& input){
   if(input.imuValid&&(std::fabs(input.pitchRad)>=config_.attitudeStopRad||std::fabs(input.rollRad)>=config_.attitudeStopRad)){safe(output,StopReason::AttitudeDanger,SafetyRequest::Fault);return output;}
 
   if(manualMode){
-    output.leftPrelimit=manual_.leftFront;output.rightPrelimit=manual_.rightFront;
-    output.rearPrelimit=manual_.rearYaw;output.propulsionPrelimit=manual_.propulsion;
+    output.enabledMask=manual_.enabledMask;
+    output.leftPrelimit=(manual_.enabledMask&ManualLeft)?manual_.leftFront:0;
+    output.rightPrelimit=(manual_.enabledMask&ManualRight)?manual_.rightFront:0;
+    output.rearPrelimit=(manual_.enabledMask&ManualRear)?manual_.rearYaw:0;
+    output.propulsionPrelimit=(manual_.enabledMask&ManualPropulsion)?manual_.propulsion:0;
   }else{
+    output.enabledMask=ManualAll;
     output.uPitch=config_.kpPitch*(config_.targetPitch-input.pitchRad)-config_.kdPitch*input.pitchRateRadS;
     output.uRoll=config_.kpRoll*(config_.targetRoll-input.rollRad)-config_.kdRoll*input.rollRateRadS;
     const bool tofFresh=fresh(input.tofValid,input.tofUs,input.nowUs,config_.tofStaleUs);
@@ -133,8 +137,15 @@ Output Controller::step(const SensorInput& input){
 
   if(!finite(output.leftPrelimit)||!finite(output.rightPrelimit)||!finite(output.rearPrelimit)||!finite(output.propulsionPrelimit)){safe(output,StopReason::NonFinite,SafetyRequest::Fault);return output;}
   if(output.propulsionPrelimit>.02f){
-    if(!fresh(input.powerValid,input.powerUs,input.nowUs,config_.powerStaleUs)){safe(output,input.powerValid?StopReason::PowerStale:StopReason::PowerInvalid,SafetyRequest::Fault);return output;}
-    if(!fresh(input.vescValid,input.vescUs,input.nowUs,config_.vescStaleUs)){safe(output,StopReason::VescStale,SafetyRequest::Fault);return output;}
+    const bool vescFresh=fresh(input.vescValid,input.vescUs,input.nowUs,config_.vescStaleUs);
+    const bool powerFresh=fresh(input.powerValid,input.powerUs,input.nowUs,config_.powerStaleUs);
+    if(input.vescFault||!vescFresh||!powerFresh){
+      const StopReason unavailable=input.vescFault?StopReason::VescFault:(!vescFresh?StopReason::VescStale:(input.powerValid?StopReason::PowerStale:StopReason::PowerInvalid));
+      if(mode_==ControlMode::AutoWaypoint){safe(output,unavailable,SafetyRequest::Fault);return output;}
+      output.propulsionPrelimit=0;output.flags|=PropulsionUnavailable;output.reason=unavailable;
+    }
+  }
+  if(output.propulsionPrelimit>.02f){
     if(input.busVoltageV<=config_.criticalVoltageV){safe(output,StopReason::LowVoltage,SafetyRequest::Fault);return output;}
     if(std::fabs(input.currentA)>=config_.criticalCurrentA){safe(output,StopReason::OverCurrent,SafetyRequest::Fault);return output;}
     if(input.busVoltageV<config_.lowVoltageV){output.throttleLimit=.50f;output.flags|=VoltageLimited;output.reason=StopReason::LowVoltage;}
