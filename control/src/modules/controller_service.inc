@@ -65,7 +65,7 @@ bool productionPreflightReady(){
   const bool powerOk=(latestIna.valid&&lastInaUs&&now-lastInaUs<=kPowerStateStaleUs)||(vescValues.valid&&lastVescRxUs&&now-lastVescRxUs<=kVescStateStaleUs&&isfinite(vescValues.inputVoltageV)&&vescValues.inputVoltageV>0);
   const bool vescOk=vescValues.valid&&lastVescRxUs&&now-lastVescRxUs<=kVescStateStaleUs;
   const bool linkOk=lastHostHeartbeatMs&&millis()-lastHostHeartbeatMs<=kLinkFailSafeTimeoutMs;
-  const bool waypointMode=mode==production_control::ControlMode::AutoWaypoint||mode==production_control::ControlMode::WaypointOnly;
+  const bool waypointMode=production_control::modeUsesWaypoint(mode);
   const bool navOk=!waypointMode||
                    (navigation.valid&&competitionController.waypointCount()>0);
   const bool manualOk=waypointMode||
@@ -110,6 +110,7 @@ void applyCompetitionActuators(const production_control::Output& output,uint64_t
 uint32_t controlAge(uint64_t stamp,uint64_t now){return stamp&&now>=stamp?static_cast<uint32_t>(min<uint64_t>(now-stamp,UINT32_MAX)):UINT32_MAX;}
 
 void sendProductionTelemetry(const boat::EstimatedStatePayload& estimated,const production_control::SensorInput& input,uint64_t now){
+  if(competitionOutput.reason==production_control::StopReason::None)competitionOutput.reason=latchedCompetitionReason;
   boat::ControlOutputPayload output{};output.timestampUs=now;output.leftFrontWing=competitionOutput.leftFront;output.rightFrontWing=competitionOutput.rightFront;output.rearYaw=competitionOutput.rearYaw;output.propulsion=competitionOutput.propulsion;output.leftPrelimit=competitionOutput.leftPrelimit;output.rightPrelimit=competitionOutput.rightPrelimit;output.rearYawPrelimit=competitionOutput.rearPrelimit;output.propulsionPrelimit=competitionOutput.propulsionPrelimit;output.uHeight=competitionOutput.uHeight;output.uPitch=competitionOutput.uPitch;output.uRoll=competitionOutput.uRoll;output.targetCourseRad=competitionOutput.targetYaw;output.courseErrorRad=competitionOutput.courseErrorRad;output.waypointDistanceM=competitionOutput.waypointDistanceM;output.waypointIndex=competitionOutput.activeWaypoint;output.safety=static_cast<uint8_t>(safety);output.stopReason=static_cast<uint8_t>(competitionOutput.reason);output.reservedControl=competitionOutput.enabledMask;output.valid=competitionOutput.physicalGate?1:0;
   linkSend(boat::Type::ControlOutput,reinterpret_cast<uint8_t*>(&output),sizeof(output));
   boat::ControlSnapshotPayload snapshot{};snapshot.timestampUs=now;snapshot.cycle=competitionPwmWrites/3;snapshot.waypointRevision=waypointRevision;snapshot.gnssAgeUs=controlAge(input.gnssUs,now);snapshot.imuAgeUs=controlAge(input.imuUs,now);snapshot.tofAgeUs=controlAge(input.tofUs,now);snapshot.latitudeDeg=navigation.latitudeDeg;snapshot.longitudeDeg=navigation.longitudeDeg;snapshot.speedMps=navigation.speedMps;snapshot.gnssCourseRad=navigation.courseRad;snapshot.localNorthM=navNorthM;snapshot.localEastM=navEastM;snapshot.rollRad=estimated.rollRad;snapshot.pitchRad=estimated.pitchRad;snapshot.yawRad=estimated.yawRad;snapshot.rollRateRadS=estimated.rollRateRadS;snapshot.pitchRateRadS=estimated.pitchRateRadS;snapshot.yawRateRadS=estimated.yawRateRadS;snapshot.tofFilteredM=estimated.waterDistanceM;snapshot.heightErrorM=kCompetitionTargetHeightM-estimated.waterDistanceM;snapshot.uHeight=competitionOutput.uHeight;snapshot.uPitch=competitionOutput.uPitch;snapshot.uRoll=competitionOutput.uRoll;snapshot.uYaw=competitionOutput.uYaw;snapshot.frontCommon=competitionOutput.uHeight+competitionOutput.uPitch;snapshot.frontDifferential=competitionOutput.uRoll;snapshot.leftFrontWing=competitionOutput.leftFront;snapshot.rightFrontWing=competitionOutput.rightFront;snapshot.rearYaw=competitionOutput.rearYaw;snapshot.propulsion=competitionOutput.propulsion;snapshot.leftPrelimit=competitionOutput.leftPrelimit;snapshot.rightPrelimit=competitionOutput.rightPrelimit;snapshot.rearYawPrelimit=competitionOutput.rearPrelimit;snapshot.propulsionPrelimit=competitionOutput.propulsionPrelimit;snapshot.gnssValid=input.gnssValid;snapshot.imuValid=input.imuValid;snapshot.tofValid=input.tofValid;snapshot.heightValid=input.tofValid;snapshot.waypointReached=competitionOutput.waypointReached;snapshot.outputValid=competitionOutput.physicalGate;snapshot.state=static_cast<uint8_t>(safety);snapshot.safetyReason=static_cast<uint8_t>(competitionOutput.reason);snapshot.mode=static_cast<uint8_t>(competitionController.mode());snapshot.activeWaypoint=competitionOutput.activeWaypoint;snapshot.targetBearingRad=competitionOutput.targetYaw;snapshot.courseErrorRad=competitionOutput.courseErrorRad;snapshot.waypointDistanceM=competitionOutput.waypointDistanceM;
@@ -134,6 +135,7 @@ void runProductionControl(){
   input.powerValid=inaFresh||vescPowerValid;input.powerUs=inaFresh?lastInaUs:(vescPowerValid?lastVescRxUs:0);input.vescValid=vescValues.valid;input.vescUs=lastVescRxUs;input.vescFault=vescValues.fault!=0;
   input.rollRad=estimated.rollRad;input.pitchRad=estimated.pitchRad;input.yawRad=estimated.yawRad;input.rollRateRadS=estimated.rollRateRadS;input.pitchRateRadS=estimated.pitchRateRadS;input.yawRateRadS=estimated.yawRateRadS;input.tofM=estimated.waterDistanceM;input.northM=navNorthM;input.eastM=navEastM;input.groundSpeedMps=navigation.speedMps;input.courseRad=navigation.courseRad;input.busVoltageV=inaFresh?latestIna.busV:vescValues.inputVoltageV;input.currentA=inaFresh?latestIna.currentRegA:vescValues.inputCurrentA;input.powerW=inaFresh?latestIna.powerRegW:input.busVoltageV*input.currentA;input.vescErpm=vescValues.erpm;
   competitionOutput=competitionController.step(input);
+  if(competitionOutput.reason!=production_control::StopReason::None)latchedCompetitionReason=competitionOutput.reason;
   if(competitionOutput.safetyRequest==production_control::SafetyRequest::Fault&&safety==SafetyState::RUNNING){safeOutputs();setState(SafetyState::FAULT);}
   else if(competitionOutput.safetyRequest==production_control::SafetyRequest::Disarm&&safety==SafetyState::RUNNING)stop();
   applyCompetitionActuators(competitionOutput,now);
@@ -152,7 +154,7 @@ void linkRxService(){
     }else if(type==boat::Type::WaypointSet)handleWaypointSet(frame);
     else if(type==boat::Type::ControlModeCommand||type==boat::Type::ManualCommand||type==boat::Type::HeadingTarget)handleCompetitionCommand(frame);
     else if(type==boat::Type::TimeSyncRequest&&frame.header.length==sizeof(boat::TimeSyncRequestPayload)){boat::TimeSyncRequestPayload request{};memcpy(&request,frame.payload,sizeof(request));boat::TimeSyncReplyPayload reply{request.sequence,request.t1Us,nowUs(),nowUs()};linkSend(boat::Type::TimeSyncReply,reinterpret_cast<uint8_t*>(&reply),sizeof(reply));}
-    else if(type==boat::Type::Arm){const bool ok=safety==SafetyState::DISARMED&&productionPreflightReady();if(ok)setState(SafetyState::ARMED_IDLE);sendCommandAck(frame,ok?0:1,ok?0:1);}
+    else if(type==boat::Type::Arm){const bool ok=safety==SafetyState::DISARMED&&productionPreflightReady();if(ok){latchedCompetitionReason=production_control::StopReason::None;setState(SafetyState::ARMED_IDLE);}sendCommandAck(frame,ok?0:1,ok?0:1);}
     else if(type==boat::Type::Disarm||type==boat::Type::Stop){stop();sendCommandAck(frame,0,0);}
     else if(type==boat::Type::StartTest){const bool ok=safety==SafetyState::ARMED_IDLE&&productionPreflightReady();if(ok){profile=TestProfile::SensorOnly;testStartMs=millis();setState(SafetyState::RUNNING);}sendCommandAck(frame,ok?0:1,ok?0:2);}
     else if(type==boat::Type::Estop){safeOutputs();profile=TestProfile::None;setState(SafetyState::E_STOP);sendCommandAck(frame,0,0);}
@@ -161,7 +163,7 @@ void linkRxService(){
   }
 }
 
-void linkHealth(){if(safety==SafetyState::RUNNING&&lastHostHeartbeatMs&&millis()-lastHostHeartbeatMs>kLinkFailSafeTimeoutMs){safeOutputs();setState(SafetyState::FAULT);}}
+void linkHealth(){if(safety==SafetyState::RUNNING&&lastHostHeartbeatMs&&millis()-lastHostHeartbeatMs>kLinkFailSafeTimeoutMs){latchedCompetitionReason=production_control::StopReason::Heartbeat;safeOutputs();setState(SafetyState::FAULT);}}
 
 void control(){}
 void start(TestProfile){if(safety==SafetyState::ARMED_IDLE&&productionPreflightReady())setState(SafetyState::RUNNING);}

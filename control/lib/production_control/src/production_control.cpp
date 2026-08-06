@@ -88,9 +88,9 @@ Output Controller::step(const SensorInput& input){
   if(input.safety!=AuthoritativeSafety::Running){safe(output,input.safety==AuthoritativeSafety::EStop?StopReason::EStop:StopReason::None,SafetyRequest::None);return output;}
   if(!fresh(input.heartbeat,input.heartbeatUs,input.nowUs,config_.heartbeatStaleUs)){safe(output,StopReason::Heartbeat,SafetyRequest::Fault);return output;}
   const bool manualMode=mode_==ControlMode::Manual;
-  const bool waypointMode=mode_==ControlMode::AutoWaypoint||mode_==ControlMode::WaypointOnly;
-  const bool attitudeControl=mode_==ControlMode::AttitudeAssist||mode_==ControlMode::HeadingHold||mode_==ControlMode::AutoWaypoint;
-  const bool needsManual=!waypointMode;
+  const bool waypointMode=modeUsesWaypoint(mode_);
+  const bool attitudeControl=modeUsesAttitude(mode_);
+  const bool needsManual=modeNeedsManual(mode_);
   if(needsManual&&!fresh(true,manualReceivedUs_,input.nowUs,config_.manualStaleUs)){safe(output,StopReason::ManualTimeout,SafetyRequest::Disarm);return output;}
   if(!manualMode&&!fresh(input.imuValid,input.imuUs,input.nowUs,config_.imuStaleUs)){safe(output,input.imuValid?StopReason::ImuStale:StopReason::ImuInvalid,SafetyRequest::Fault);return output;}
   if(waypointMode&&(!fresh(input.gnssValid,input.gnssUs,input.nowUs,config_.gnssStaleUs)||!waypointCount_)){safe(output,input.gnssValid?StopReason::GnssStale:StopReason::GnssInvalid,SafetyRequest::Fault);return output;}

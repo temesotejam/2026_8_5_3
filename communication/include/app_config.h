@@ -2,7 +2,7 @@
 #include <Arduino.h>
 namespace app_config {
 constexpr char kFirmwareName[] = "cores3-telemetry-bridge";
-constexpr char kFirmwareVersion[] = "3.0.0-auto-select";
+constexpr char kFirmwareVersion[] = "3.0.1-gnss-mode-gate";
 // CoreS3 Port C: GNSS TX connects to GPIO18 (CoreS3 RX). GPIO17 is reserved as TX.
 constexpr int kGnssRxPin = 18, kGnssTxPin = 17;
 // CoreS3 Port B: GPIO8 is receiver and GPIO9 is transmitter for the control XIAO link.
