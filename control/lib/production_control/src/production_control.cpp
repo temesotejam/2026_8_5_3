@@ -94,9 +94,14 @@ Output Controller::step(const SensorInput& input){
   if(needsManual&&!fresh(true,manualReceivedUs_,input.nowUs,config_.manualStaleUs)){safe(output,StopReason::ManualTimeout,SafetyRequest::Disarm);return output;}
   if(!manualMode&&!fresh(input.imuValid,input.imuUs,input.nowUs,config_.imuStaleUs)){safe(output,input.imuValid?StopReason::ImuStale:StopReason::ImuInvalid,SafetyRequest::Fault);return output;}
   if(waypointMode&&(!fresh(input.gnssValid,input.gnssUs,input.nowUs,config_.gnssStaleUs)||!waypointCount_)){safe(output,input.gnssValid?StopReason::GnssStale:StopReason::GnssInvalid,SafetyRequest::Fault);return output;}
-  // Manual commissioning deliberately has no IMU dependency. A boat may be
-  // tilted on the bench; that must not disable a selected servo-only channel.
-  if(!manualMode&&input.imuValid&&(std::fabs(input.pitchRad)>=config_.attitudeStopRad||std::fabs(input.rollRad)>=config_.attitudeStopRad)){safe(output,StopReason::AttitudeDanger,SafetyRequest::Fault);return output;}
+  // Disabled in the current human-monitored configuration. Keep the optional
+  // trip behind an explicit setting so a later unattended operating profile
+  // can restore it without changing controller logic.
+  if(config_.enableAttitudeDangerTrip&&input.imuValid&&
+     (std::fabs(input.pitchRad)>=config_.attitudeStopRad||
+      std::fabs(input.rollRad)>=config_.attitudeStopRad)){
+    safe(output,StopReason::AttitudeDanger,SafetyRequest::Fault);return output;
+  }
 
   if(manualMode){
     output.enabledMask=manual_.enabledMask;
@@ -116,7 +121,8 @@ Output Controller::step(const SensorInput& input){
         output.uPitch=clampf(output.uPitch*1.5f,-1.0f,1.0f);output.uHeight=0;output.uRoll*=.25f;output.flags|=PitchPriority;
       }
       const float common=output.uPitch+output.uHeight;
-      output.leftPrelimit=common+output.uRoll;output.rightPrelimit=common-output.uRoll;
+      output.leftPrelimit=clampf(common+output.uRoll,-config_.attitudeServoLimit,config_.attitudeServoLimit);
+      output.rightPrelimit=clampf(common-output.uRoll,-config_.attitudeServoLimit,config_.attitudeServoLimit);
     }else{
       // WaypointOnly keeps both front-wing servos actively at neutral while
       // removing roll, pitch, and ToF-height corrections.

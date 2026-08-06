@@ -78,6 +78,8 @@ void testIndependentWaypointAndAttitudeModes() {
   attitudeOnly.setManual({.7f,-.7f,.3f,.4f,ManualAll},input.nowUs);
   const auto assisted=attitudeOnly.step(input);
   assert(assisted.safetyRequest==SafetyRequest::None);
+  assert(std::fabs(assisted.leftPrelimit)<=.50f);
+  assert(std::fabs(assisted.rightPrelimit)<=.50f);
   assert(assisted.leftFront!=0||assisted.rightFront!=0);
   assert(assisted.rearYaw>0);
   assert(assisted.propulsion>0);
@@ -102,10 +104,24 @@ void testIndependentWaypointAndAttitudeModes() {
   assert(noFix.safetyRequest==SafetyRequest::Fault);
   assert(noFix.reason==StopReason::GnssInvalid);
 
-  input=nominal(1'100'000);input.rollRad=.8f;
-  const auto unsafeAttitude=waypointOnly.step(input);
-  assert(unsafeAttitude.safetyRequest==SafetyRequest::Fault);
-  assert(unsafeAttitude.reason==StopReason::AttitudeDanger);
+  // Attitude angle alone is never a stop condition. This also covers the
+  // installed sensor's level reading near +/-pi.
+  input=nominal(1'100'000);input.rollRad=.8f;input.pitchRad=3.0927f;
+  const auto largeAttitude=waypointOnly.step(input);
+  assert(largeAttitude.safetyRequest==SafetyRequest::None);
+  assert(largeAttitude.physicalGate);
+  assert(largeAttitude.reason!=StopReason::AttitudeDanger);
+
+  // The trip remains available for a future unattended profile, but is not
+  // active unless that profile explicitly enables it.
+  Config unattendedConfig{};
+  unattendedConfig.enableAttitudeDangerTrip=true;
+  Controller unattended(unattendedConfig);
+  assert(unattended.setWaypoints(route,1,1,AuthoritativeSafety::Disarmed).ack==Ack::Accepted);
+  assert(unattended.setMode(ControlMode::WaypointOnly,2,AuthoritativeSafety::Disarmed).ack==Ack::Accepted);
+  const auto futureTrip=unattended.step(input);
+  assert(futureTrip.safetyRequest==SafetyRequest::Fault);
+  assert(futureTrip.reason==StopReason::AttitudeDanger);
 }
 
 void testFinalWaypointStops() {
@@ -248,8 +264,9 @@ void testServoOnlyManualIgnoresUnrelatedSensorTrips() {
   assisted.setMode(ControlMode::AttitudeAssist,1,AuthoritativeSafety::Disarmed);
   assisted.setManual({0,0,0,0,ManualLeft},input.nowUs);
   const auto assistedOutput=assisted.step(input);
-  assert(assistedOutput.safetyRequest==SafetyRequest::Fault);
-  assert(assistedOutput.reason==StopReason::AttitudeDanger);
+  assert(assistedOutput.safetyRequest==SafetyRequest::None);
+  assert(assistedOutput.physicalGate);
+  assert(assistedOutput.reason!=StopReason::AttitudeDanger);
 }
 
 void testFullManualWithPropulsion() {

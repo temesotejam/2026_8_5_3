@@ -59,11 +59,22 @@ void State::ingestRotation(uint64_t sensorUs, uint64_t receivedUs,
         atan2f(2.0f * (qw_ * qz_ + qx_ * qy_),
                1.0f - 2.0f * (qy_ * qy_ + qz_ * qz_));
 
-    // Preserve the boat convention already used by the controller:
-    // roll about +Y, pitch about -X, yaw about +Z.
-    rollRad_ = standardPitch;
-    pitchRad_ = -standardRoll;
-    yawRad_ = wrapPi(standardYaw);
+    // The first valid attitude after program start defines the boat's neutral
+    // pose. This removes the installed sensor's fixed mounting orientation
+    // (including the observed level reading near +/-pi) without assuming a
+    // particular physical mounting rotation.
+    if (!referenceAttitudeSet_) {
+      referenceStandardRollRad_ = standardRoll;
+      referenceStandardPitchRad_ = standardPitch;
+      referenceStandardYawRad_ = standardYaw;
+      referenceAttitudeSet_ = true;
+    }
+
+    // Preserve the controller convention: roll about +Y, pitch about -X, and
+    // yaw about +Z, now expressed relative to the program-start pose.
+    rollRad_ = wrapPi(standardPitch - referenceStandardPitchRad_);
+    pitchRad_ = -wrapPi(standardRoll - referenceStandardRollRad_);
+    yawRad_ = wrapPi(standardYaw - referenceStandardYawRad_);
   }
   portEXIT_CRITICAL(&mux_);
 }

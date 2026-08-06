@@ -44,6 +44,16 @@ jobs:
           control/lib/production_control/src/competition_actuators.cpp
           -o controller_test && ./controller_test
 
+      - name: Program-start attitude reference tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror
+          -Itests/stubs
+          -Icontrol/include
+          -Icontrol/lib/boat_protocol/src
+          tests/control_state_test.cpp
+          control/src/control_state.cpp
+          -o control_state_test && ./control_state_test
+
       - name: Protocol and command tests
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror
