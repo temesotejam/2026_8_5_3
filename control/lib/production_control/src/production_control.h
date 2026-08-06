@@ -5,7 +5,11 @@
 namespace production_control {
 
 enum class AuthoritativeSafety : uint8_t { Boot=0, Disarmed=1, ArmedIdle=2, Running=3, EStop=4, Fault=5 };
-enum class ControlMode : uint8_t { Manual=0, AttitudeAssist=1, HeadingHold=2, AutoWaypoint=3 };
+// Values 0..3 are wire-compatible with the commissioned firmware. WaypointOnly
+// is appended so the existing AutoWaypoint meaning is not changed.
+enum class ControlMode : uint8_t {
+  Manual=0, AttitudeAssist=1, HeadingHold=2, AutoWaypoint=3, WaypointOnly=4
+};
 enum class Ack : uint8_t { Accepted=0, Rejected=1, Duplicate=2, Conflict=3, Stale=4, Malformed=5 };
 enum class SafetyRequest : uint8_t { None=0, Disarm=1, Fault=2 };
 enum class StopReason : uint8_t {

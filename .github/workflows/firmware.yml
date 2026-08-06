@@ -56,10 +56,39 @@ jobs:
           control/lib/boat_protocol/src/boat_protocol.cpp
           -o protocol_test && ./protocol_test
 
+      - name: CoreS3 GNSS receiver tests
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror
+          -Itests/stubs
+          -Icommunication/include
+          tests/gnss_receiver_test.cpp
+          communication/src/gnss_receiver.cpp
+          -o gnss_receiver_test && ./gnss_receiver_test
+
+      - name: CoreS3 host syntax and format checks
+        run: >-
+          g++ -std=c++17 -Wall -Wextra -Werror -DARDUINO
+          -Itests/stubs
+          -Icommunication/include
+          -Icommunication/lib/boat_protocol/src
+          -fsyntax-only
+          communication/src/main.cpp
+          communication/src/gnss_receiver.cpp
+
       - name: Protocol copies match
         run: |
           cmp control/lib/boat_protocol/src/boat_protocol.h communication/lib/boat_protocol/src/boat_protocol.h
           cmp control/lib/boat_protocol/src/boat_protocol.cpp communication/lib/boat_protocol/src/boat_protocol.cpp
+
+      - name: CoreS3 Web JavaScript syntax
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path("communication/include/production_page_ja.h").read_text()
+          script = source.split("<script>", 1)[1].split("</script>", 1)[0]
+          Path("production_page.js").write_text(script)
+          PY
+          node --check production_page.js
 
   firmware:
     needs: host-tests

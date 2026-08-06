@@ -65,9 +65,10 @@ bool productionPreflightReady(){
   const bool powerOk=(latestIna.valid&&lastInaUs&&now-lastInaUs<=kPowerStateStaleUs)||(vescValues.valid&&lastVescRxUs&&now-lastVescRxUs<=kVescStateStaleUs&&isfinite(vescValues.inputVoltageV)&&vescValues.inputVoltageV>0);
   const bool vescOk=vescValues.valid&&lastVescRxUs&&now-lastVescRxUs<=kVescStateStaleUs;
   const bool linkOk=lastHostHeartbeatMs&&millis()-lastHostHeartbeatMs<=kLinkFailSafeTimeoutMs;
-  const bool navOk=mode!=production_control::ControlMode::AutoWaypoint||
+  const bool waypointMode=mode==production_control::ControlMode::AutoWaypoint||mode==production_control::ControlMode::WaypointOnly;
+  const bool navOk=!waypointMode||
                    (navigation.valid&&competitionController.waypointCount()>0);
-  const bool manualOk=mode==production_control::ControlMode::AutoWaypoint||
+  const bool manualOk=waypointMode||
                       (competitionController.manualReceivedUs()&&now-competitionController.manualReceivedUs()<=500000ULL);
   const bool actuatorConfigOk=kCompetitionLeftChannel!=kCompetitionRightChannel&&kCompetitionLeftChannel!=kCompetitionRearChannel&&kCompetitionRightChannel!=kCompetitionRearChannel&&
                               kCompetitionServoMinUs<kCompetitionServoNeutralUs&&kCompetitionServoNeutralUs<kCompetitionServoMaxUs;

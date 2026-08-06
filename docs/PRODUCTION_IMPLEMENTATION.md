@@ -2,9 +2,9 @@
 
 ## 構成
 
-現在の通信側CoreS3は、成立済みの手動開始経路を使って機体全体を操作する版です。921600 bps、8N1、COBS＋CRC32で制御側XIAOと通信し、100 ms周期のHeartbeat、左右前翼・後部ヨー・推進の一括手動指令、安全指令、最小Web画面を担当します。GNSS、SD記録、時刻同期、ウェイポイントAPIはCoreS3の現行実行経路から外しています。
+現在の通信側CoreS3は、成立済みの手動開始経路を残したまま自動運転を統合した版です。921600 bps、8N1、COBS＋CRC32で制御側XIAOと通信し、100 ms周期のHeartbeat、左右前翼・後部ヨー・推進の一括手動指令、固定Waypoint、安全指令、統合Web画面を担当します。CoreS3 Port C（RX GPIO18／TX GPIO17）でGNSSを115200 bps受信し、10 HzでXIAOへ転送します。
 
-制御側XIAOはBNO08X、ToF、INA226、VESC、PCA9685、本番制御器を維持しており、今回のCoreS3再構成では変更しません。
+制御側XIAOはBNO08X、ToF、INA226、VESC、PCA9685、本番制御器を維持し、既存モード番号を変えずに`Waypoint Only`を追加しています。
 
 AS5600は使用しません。推進モータの回転状態はVESC UARTのERPMで監視します。モータの極対数が未確定のため、機械RPMへの推定換算は行いません。
 
@@ -37,7 +37,16 @@ AS5600は使用しません。推進モータの回転状態はVESC UARTのERPM�
 後部ヨー = yaw PD
 ```
 
-Auto Waypointでは現在位置から目標点への単純方位ではなく、前区間からのLOS（look-ahead 4 m）方位を使います。目標半径は既定1.5 mで、最終点到達時は推進を停止してDISARMEDへ遷移します。速度上昇時はヨーゲインと最大ヨー指令を下げます。pitchが危険域へ近づくと高さ・roll・推進を抑え、pitch回復を優先します。
+Auto Waypointでは現在位置から目標点への単純方位ではなく、開始位置から選択目標へのLOS（look-ahead 4 m）方位を使います。目標半径は既定1.5 mで、到達時は推進を停止してDISARMEDへ遷移します。速度上昇時はヨーゲインと最大ヨー指令を下げます。姿勢制御ONではpitchが危険域へ近づくと高さ・roll・推進を抑え、pitch回復を優先します。姿勢制御OFFでも危険姿勢停止は維持します。
+
+| Waypoint | 姿勢制御 | XIAOモード | 動作 |
+|---|---|---|---|
+| OFF | OFF | Manual | 4出力を手動操作 |
+| OFF | ON | Attitude Assist | 左右前翼は姿勢・高さ制御、後部ヨーと推進は手動 |
+| ON | OFF | Waypoint Only | 左右前翼は通電中立、後部ヨーはLOS、推進は自動 |
+| ON | ON | Auto Waypoint | LOS、姿勢・高さ、自動推進 |
+
+固定点はA〜Hです。座標は`temesotejam/waypoint_drift_los_goal_time_sim`の`main@24868f3`から転記し、`communication/include/fixed_waypoints.h`を唯一のファームウェア定義とします。
 
 制御値と安全閾値は`control/include/app_config.h`に集約しています。現行の主要値は次のとおりです。
 
@@ -61,7 +70,7 @@ Auto Waypointでは現在位置から目標点への単純方位ではなく、�
 |---|---|
 | Manual | PCA9685、CoreS3 heartbeat、500 ms以内の手動指令、1つ以上の出力選択 |
 | Attitude Assist / Heading Hold | Manualの条件に加えてBNO08X |
-| Auto Waypoint | PCA9685、CoreS3 heartbeat、BNO08X、有効GNSS、1点以上の経路、VESC電源・回転情報 |
+| Waypoint Only / Auto Waypoint | PCA9685、CoreS3 heartbeat、BNO08X、有効GNSS、固定目標、VESC電源・回転情報 |
 
 ToFは欠測時に高さ項だけを無効化するためARM必須ではありません。INA226が未接続でも、有効なVESCテレメトリの入力電圧・入力電流を電源保護へ使用できます。AS5600は使用しません。
 
@@ -71,7 +80,7 @@ START後に次のどれかを検出すると、推進Dutyを即時0、PCA9685を
 
 - CoreS3 heartbeat途絶
 - BNO08X姿勢または角速度の無効・期限切れ
-- GNSS期限切れ（Auto Waypoint）
+- GNSS期限切れ（Waypoint Only / Auto Waypoint）
 - 電源監視または回転数監視の無効・期限切れ
 - VESCテレメトリ期限切れまたはfault
 - 臨界低電圧、臨界過電流、モータ拘束
@@ -79,24 +88,25 @@ START後に次のどれかを検出すると、推進Dutyを即時0、PCA9685を
 
 ToFだけが一時的に無効になった場合は、高さ項を0にして姿勢制御を継続し、テレメトリへdegraded flagを残します。
 
-D10の安全リレーは起動直後からLOWです。VESCへ非ゼロDutyを送る直前だけHIGHにし、Duty 0では0指令を送信してからLOWに戻します。STOP、DISARM、E-STOP、FAULT、通信途絶、DRY RUN、VESC指令のUART送信失敗時もLOWです。VESCのテレメトリ要求だけではHIGHになりません。リレー状態は`ActuatorState.motorRelayEnabled`としてCoreS3、Web API、SDログへ送ります。
+D10の安全リレーは起動直後からLOWです。VESCへ非ゼロDutyを送る直前だけHIGHにし、Duty 0では0指令を送信してからLOWに戻します。STOP、DISARM、E-STOP、FAULT、通信途絶、DRY RUN、VESC指令のUART送信失敗時もLOWです。VESCのテレメトリ要求だけではHIGHになりません。リレー状態は`ActuatorState.motorRelayEnabled`としてCoreS3とWeb APIへ送ります。
 
 ## Web操作
 
-CoreS3のAP `BOAT-CONTROL`へ接続し、画面に表示されるIPアドレスを開きます。通常画面は4出力の全体手動運転に絞っています。
+CoreS3のAP `BOAT-CONTROL`へ接続し、画面に表示されるIPアドレスを開きます。画面でWaypointと姿勢制御を個別に選びます。
 
-1. 左前翼CH0、右前翼CH1、後部CH2の値をそれぞれ-1.00〜1.00で決めます。
-2. 推進値を0.00〜1.00で決めます。
-3. `開始`を押します。CoreS3本体がDISARMED確認、Manual設定ACK、手動値ACK、ARM確認、START確認を順番に実行します。
-4. 通常停止は`停止`、緊急時は`緊急停止`を使用します。
+1. Waypointと姿勢制御のON/OFFを選びます。
+2. Waypoint ONではA〜Hから固定目標を選び、CoreS3とXIAOの両方がGNSS FIXになるまで待ちます。
+3. Waypoint OFFでは必要な手動入力値を決めます。
+4. `開始`を押します。CoreS3本体がDISARMED確認、必要ならWaypoint ACK、Mode ACK、必要なら手動値ACK、ARM確認、START確認を順番に実行します。
+5. 通常停止は`停止`、緊急時は`緊急停止`を使用します。
 
-動作中は3本のサーボと推進をすべて有効にし、CoreS3が4値を1パケットにまとめて200 ms周期で更新します。XIAO側の500 ms手動指令タイムアウトを超えないようにし、左右の値が別パケットの到着順でずれることも防ぎます。停止時は推進Duty 0、D10 LOW、PCA9685全チャンネルFull OFFです。
+手動系ではCoreS3が4値を1パケットにまとめて200 ms周期で更新します。Waypoint系では手動更新を要求せず、XIAOがGNSS・BNO08X・VESC情報から出力を生成します。姿勢制御ONの場合だけToFを高さ制御に使います。停止時は推進Duty 0、D10 LOW、PCA9685全チャンネルFull OFFです。
 
 ブラウザは`開始`、`停止`、`緊急停止`という単発要求だけをCoreS3へ送ります。ブラウザ側JavaScriptはARMやSTARTを直接並べて送らないため、手動指令の実送信前にARMが追い越すことはありません。
 
 ## 現在外している通信側機能
 
-GNSS受信、SD自動記録、時刻同期、ウェイポイント編集、BNO転送診断、ベンチマークAPIは、手動出力経路を単独で確認するためCoreS3の現行ビルドから外しています。手動試験が成立した後、GNSSとSDは同じ巨大な`main.cpp`へ戻さず、独立モジュールとして1つずつ再追加します。
+SD自動記録、時刻同期、任意座標編集、BNO転送診断、ベンチマークAPIは現行CoreS3ビルドから外しています。GNSS受信と固定Waypoint選択は復帰済みです。大会運用前に必須のSD記録は、成立済みの統合運転経路と分離したモジュールとして再追加します。
 
 ## 検証
 

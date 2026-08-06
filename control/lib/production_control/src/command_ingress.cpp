@@ -20,7 +20,7 @@ CommandIngressResult CommandIngress::process(const boat::Frame& frame, Authorita
     boat::ControlModeCommandPayload c{}; memcpy(&c,frame.payload,sizeof(c)); out.requestId=c.requestId; out.commandSequence=c.commandSequence; version=c.protocolVersion;
     if(c.protocolVersion!=boat::kVersion) return malformed(type,receivedUs,CommandReason::ProtocolVersion,metrics_);
     if(c.canonicalCrc!=boat::canonicalCrc(&c,offsetof(boat::ControlModeCommandPayload,canonicalCrc))) return malformed(type,receivedUs,CommandReason::CanonicalCrc,metrics_);
-    if(c.mode>(uint8_t)ControlMode::AutoWaypoint) return malformed(type,receivedUs,CommandReason::Range,metrics_);
+    if(c.mode>(uint8_t)ControlMode::WaypointOnly) return malformed(type,receivedUs,CommandReason::Range,metrics_);
     fingerprint=c.canonicalCrc;
   } else if((boat::Type)type==boat::Type::ManualCommand) {
     if(length!=sizeof(boat::ManualCommandPayload)) return malformed(type,receivedUs,CommandReason::Type,metrics_);
